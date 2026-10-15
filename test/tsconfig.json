@@ -1,0 +1,11 @@
+{
+  "//": "The end-to-end tier is compiled: its launcher runs under Node and its suite is loaded by VS Code. The unit tier needs no build — Vitest reads TypeScript directly.",
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../out-test",
+    "rootDir": ".",
+    "sourceMap": true,
+    "types": ["node", "mocha", "vscode"]
+  },
+  "include": ["e2e/**/*.ts", "fixtures/**/*.ts"]
+}

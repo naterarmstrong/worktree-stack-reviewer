@@ -1,0 +1,406 @@
+/* Review preview editor chrome: thread cards, the composer, and the floating
+ * comment button, plus the few typographic rules that bring the page closer to
+ * how GitHub renders the same markdown. Everything else comes from the
+ * built-in preview's markdown.css, loaded before this file. */
+
+body.markdown-body {
+  padding: 0 26px 60px;
+}
+
+/* A reading column rather than the full window, the way a PR body is set on
+ * GitHub. The column is set on each block rather than on the container around
+ * them, which is what lets an image leave it (see below). Thread cards are
+ * blocks here too, so they line up with the text they annotate. The width
+ * comes from the setting, which at 0 sets no variable at all and leaves the
+ * page full width. */
+#wt-content > * {
+  max-width: var(--wt-column-width, none);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* A screenshot is usually wider than the text column, and scaling it down to
+ * fit costs the detail it was pasted in for. An image on its own line is set
+ * at its own size, up to the width of the tab, centred on the column. An
+ * image sharing its line with text or with another image — a row of badges,
+ * a caption — stays inside the column with the text it belongs to. */
+#wt-content > p:has(> img:only-child),
+#wt-content > p:has(> a:only-child > img:only-child) {
+  max-width: none;
+  text-align: center;
+}
+
+/* The same for an image written as raw HTML, which the engine leaves at the
+ * top level rather than wrapping in a paragraph. */
+#wt-content > img {
+  display: block;
+  max-width: 100%;
+}
+
+/* GitHub sets inline code as a chip. markdown.css leaves it at body size with
+ * no background, which makes a description full of flags hard to scan. */
+.markdown-body :not(pre) > code {
+  padding: 0.2em 0.4em;
+  font-size: 0.85em;
+  border-radius: 6px;
+  background-color: var(--vscode-textCodeBlock-background);
+}
+
+/* markdown.css closes a list at 0.7em, GitHub at a full line. */
+.markdown-body ul,
+.markdown-body ol {
+  margin-bottom: 16px;
+  padding-left: 2em;
+}
+
+.wt-widget {
+  margin: 10px 0;
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ------------------------------------------------------------- thread card */
+
+.wt-thread {
+  background: var(--vscode-editorWidget-background);
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.35));
+  border-left: 3px solid var(--vscode-focusBorder, #007acc);
+  border-radius: 4px;
+  padding: 8px 12px;
+}
+
+.wt-thread.wt-resolved {
+  border-left-color: var(--vscode-charts-green, #388a34);
+  opacity: 0.9;
+}
+
+/* Marks the thread a click in the tree asked for, long enough to find it. */
+.wt-widget.wt-revealed {
+  outline: 2px solid var(--vscode-focusBorder, #007acc);
+  outline-offset: 2px;
+}
+
+.wt-thread-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.wt-thread-lines {
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+a.wt-thread-lines:hover {
+  color: var(--vscode-textLink-foreground);
+  text-decoration: underline;
+}
+
+.wt-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+}
+
+.wt-badge-resolved {
+  background: var(--vscode-charts-green, #388a34);
+  color: var(--vscode-editor-background, #fff);
+}
+
+.wt-badge-note {
+  background: var(--vscode-charts-orange, #d97757);
+  color: var(--vscode-editor-background, #fff);
+}
+
+.wt-thread-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.wt-comment {
+  padding: 6px 0;
+  border-top: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.2));
+}
+
+.wt-comment-meta {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 2px;
+}
+
+.wt-author {
+  font-weight: 600;
+}
+
+.wt-time {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.wt-comment-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.wt-thread-footer {
+  margin-top: 4px;
+}
+
+/* ---------------------------------------------------------- resolved chip */
+
+.wt-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 10px;
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.35));
+  border-radius: 12px;
+  color: var(--vscode-descriptionForeground);
+  cursor: pointer;
+  max-width: 560px;
+}
+
+.wt-chip:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.wt-chip-check {
+  color: var(--vscode-charts-green, #388a34);
+}
+
+.wt-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.wt-chip-count {
+  margin-left: auto;
+  font-size: 11px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  border-radius: 8px;
+  padding: 0 6px;
+}
+
+/* ------------------------------------------------------ composer + editor */
+
+.wt-quote {
+  margin: 4px 0 8px;
+  padding: 4px 10px;
+  border-left: 3px solid var(--vscode-textBlockQuote-border, rgba(128, 128, 128, 0.5));
+  background: var(--vscode-textBlockQuote-background, rgba(128, 128, 128, 0.1));
+  color: var(--vscode-descriptionForeground);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 120px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+.wt-editor textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 2px;
+  padding: 6px 8px;
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+}
+
+.wt-editor textarea:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.wt-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* ---------------------------------------------------------------- buttons */
+
+.wt-primary,
+.wt-secondary {
+  font-family: var(--vscode-font-family);
+  font-size: 12px;
+  padding: 3px 12px;
+  border-radius: 2px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.wt-primary {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+
+.wt-primary:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.wt-secondary {
+  background: var(--vscode-button-secondaryBackground, transparent);
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  border-color: var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.35));
+}
+
+.wt-secondary:hover {
+  background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground));
+}
+
+.wt-add-button {
+  position: absolute;
+  z-index: 10;
+  background: var(--vscode-editorWidget-background);
+  color: var(--vscode-foreground);
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.35));
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.wt-add-button:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+/* ---------------------------------------------------------- review dialog */
+
+/* A modal over a PR description: the page dims behind it but stays readable,
+ * so the description and its conversation can be checked while writing. */
+.wt-review-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh 16px 16px;
+  background: rgba(0, 0, 0, 0.45);
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+}
+
+body.wt-review-open {
+  overflow: hidden;
+}
+
+.wt-review-dialog {
+  width: min(640px, 100%);
+  max-height: 76vh;
+  overflow-y: auto;
+  box-sizing: border-box;
+  background: var(--vscode-editorWidget-background);
+  color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.35));
+  border-radius: 6px;
+  box-shadow: 0 8px 32px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.4));
+  padding: 16px;
+}
+
+.wt-review-header {
+  margin-bottom: 12px;
+}
+
+.wt-review-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.wt-review-subtitle {
+  margin-top: 2px;
+  color: var(--vscode-descriptionForeground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wt-review-body {
+  width: 100%;
+  min-height: 120px;
+  box-sizing: border-box;
+  resize: vertical;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.35));
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.wt-review-body:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.wt-review-verdicts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 14px 0 4px;
+}
+
+.wt-review-verdict {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.wt-review-verdict input {
+  margin: 3px 0 0;
+  accent-color: var(--vscode-button-background);
+}
+
+.wt-review-verdict-label {
+  font-weight: 600;
+}
+
+.wt-review-verdict-hint {
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+}
+
+.wt-review-error {
+  margin-top: 10px;
+  color: var(--vscode-errorForeground);
+  white-space: pre-wrap;
+}
+
+.wt-review-error:empty {
+  display: none;
+}
+
+.wt-review-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.wt-review-actions button {
+  font-size: 13px;
+  padding: 4px 14px;
+}
+
+.wt-review-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

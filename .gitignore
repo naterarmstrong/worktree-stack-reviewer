@@ -1,0 +1,13 @@
+node_modules/
+core/target/
+bin/
+out/
+out-test/
+.claude/
+.vscode-test/
+
+# Packaging is not reproducible: vsce stamps ZIP entry mtimes at package time,
+# and the prepublish compile rewrites every out/*.js, so building unchanged
+# source still yields different bytes. Tracking the artifact meant it showed as
+# modified after every build. Rebuild it with install.sh instead.
+*.vsix

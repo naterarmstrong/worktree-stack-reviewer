@@ -1,0 +1,636 @@
+{
+  "name": "worktree-stack-reviewer",
+  "displayName": "Worktree Stack Reviewer",
+  "description": "Worktree review with editable diffs and inline comments, scoped to the GitHub stack parent (gh stack / gt).",
+  "version": "0.17.0",
+  "publisher": "naterarmstrong",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onUri"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "worktreeReview",
+          "title": "Worktree Stack Reviewer",
+          "icon": "$(git-branch)"
+        }
+      ]
+    },
+    "views": {
+      "worktreeReview": [
+        {
+          "id": "worktreeReview.changes",
+          "name": "Changes by Worktree"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "worktreeReview.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.openDiff",
+        "title": "Open Diff",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.openFile",
+        "title": "Open File",
+        "category": "Worktree Stack Reviewer",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "worktreeReview.revealWorktree",
+        "title": "Reveal Worktree in Explorer",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.toggleLayout",
+        "title": "Toggle Flat/Tree Layout",
+        "icon": "$(list-tree)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.hideUncommitted",
+        "title": "Showing Working Tree \u2014 click to show committed changes only",
+        "icon": "$(git-commit)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.showUncommitted",
+        "title": "Showing Committed Only \u2014 click to include uncommitted changes",
+        "icon": "$(edit)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.hideViewedFiles",
+        "title": "Showing All Files \u2014 click to hide viewed ones",
+        "icon": "$(eye)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.showViewedFiles",
+        "title": "Hiding Viewed Files \u2014 click to show them",
+        "icon": "$(eye-closed)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.markAllViewed",
+        "title": "Mark All Viewed",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.markAllUnviewed",
+        "title": "Mark All Unviewed",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.resetViewed",
+        "title": "Clear Viewed Marks on This Branch",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.showLogs",
+        "title": "Show Logs",
+        "icon": "$(output)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.diagnostics",
+        "title": "Diagnostics",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.checkoutPrBranch",
+        "title": "Check out worktree to this branch",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.checkoutInReviewWorktree",
+        "title": "Check out in review worktree",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.resetReviewWorktree",
+        "title": "Reset review worktree to the review branch",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.nameWorktree",
+        "title": "Name This Worktree\u2026",
+        "icon": "$(tag)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.nameStack",
+        "title": "Name This Stack\u2026",
+        "icon": "$(tag)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.openPrInBrowser",
+        "title": "Open PR in Browser",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.copyPrUrl",
+        "title": "Copy PR URL",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.openPrBody",
+        "title": "Open PR Description",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.reviewPr",
+        "title": "Review Pull Request\u2026",
+        "icon": "$(code-review)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.compareVersionWithPrevious",
+        "title": "Compare with Previous Version",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.compareVersionWithBase",
+        "title": "Show Version Diff (vs Base)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.compareVersionWith",
+        "title": "Compare with Another Version\u2026",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.compareBranchVersions",
+        "title": "Compare Versions\u2026",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.createComment",
+        "title": "Add Comment",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.addCommentFromPreview",
+        "title": "Add Worktree Stack Reviewer Comment",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.openPreviewEditor",
+        "title": "Open Review Preview to the Side",
+        "icon": "$(comment-discussion)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.replyComment",
+        "title": "Reply",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.editComment",
+        "title": "Edit Comment",
+        "icon": "$(edit)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.saveComment",
+        "title": "Save",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.cancelEdit",
+        "title": "Cancel",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.deleteComment",
+        "title": "Delete Comment",
+        "icon": "$(trash)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.deleteThread",
+        "title": "Delete Thread",
+        "icon": "$(trash)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.toggleResolved",
+        "title": "Toggle Resolved",
+        "icon": "$(check)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.revealComment",
+        "title": "Reveal Comment",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.copyComments",
+        "title": "Copy Comments as JSON",
+        "icon": "$(clippy)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.copyAllComments",
+        "title": "Copy Comments as JSON (All Worktrees)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.openCommentsFile",
+        "title": "Open Comments File",
+        "icon": "$(go-to-file)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.copyCommentsPath",
+        "title": "Copy Comments File Path",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.clearComments",
+        "title": "Delete All Comments on This Branch",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.pruneComments",
+        "title": "Archive Comments from Deleted Branches",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.applyResolutions",
+        "title": "Apply Pending Agent Resolutions",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.copyInboxPath",
+        "title": "Copy Resolutions Inbox Path",
+        "category": "Worktree Stack Reviewer"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "worktreeReview.addCommentFromPreview",
+          "when": "false"
+        },
+        {
+          "command": "worktreeReview.reviewPr",
+          "when": "false"
+        }
+      ],
+      "webview/context": [
+        {
+          "command": "worktreeReview.addCommentFromPreview",
+          "when": "(webviewId == 'markdown.preview' || webviewId == 'vscode.markdown.preview.editor') && wtReviewSelection"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "worktreeReview.openPreviewEditor",
+          "when": "resourceLangId == markdown && !notebookEditorFocused",
+          "group": "navigation"
+        },
+        {
+          "command": "worktreeReview.reviewPr",
+          "when": "resourceScheme == wt-ext-pr",
+          "group": "navigation"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "worktreeReview.hideUncommitted",
+          "when": "view == worktreeReview.changes && worktreeReview.includeUncommitted",
+          "group": "navigation@1"
+        },
+        {
+          "command": "worktreeReview.showUncommitted",
+          "when": "view == worktreeReview.changes && !worktreeReview.includeUncommitted",
+          "group": "navigation@1"
+        },
+        {
+          "command": "worktreeReview.hideViewedFiles",
+          "when": "view == worktreeReview.changes && !worktreeReview.hideViewed",
+          "group": "navigation@2"
+        },
+        {
+          "command": "worktreeReview.showViewedFiles",
+          "when": "view == worktreeReview.changes && worktreeReview.hideViewed",
+          "group": "navigation@2"
+        },
+        {
+          "command": "worktreeReview.toggleLayout",
+          "when": "view == worktreeReview.changes",
+          "group": "navigation@3"
+        },
+        {
+          "command": "worktreeReview.refresh",
+          "when": "view == worktreeReview.changes",
+          "group": "navigation@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "worktreeReview.openFile",
+          "when": "view == worktreeReview.changes && viewItem == file",
+          "group": "inline"
+        },
+        {
+          "command": "worktreeReview.openFile",
+          "when": "view == worktreeReview.changes && viewItem == file",
+          "group": "navigation"
+        },
+        {
+          "command": "worktreeReview.revealWorktree",
+          "when": "view == worktreeReview.changes && viewItem =~ /^worktree/",
+          "group": "navigation"
+        },
+        {
+          "command": "worktreeReview.resetReviewWorktree",
+          "when": "view == worktreeReview.changes && viewItem == 'worktree.review'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "worktreeReview.nameWorktree",
+          "when": "view == worktreeReview.changes && viewItem =~ /^worktree/",
+          "group": "name@1"
+        },
+        {
+          "command": "worktreeReview.nameStack",
+          "when": "view == worktreeReview.changes && (viewItem =~ /^worktree/ || viewItem == stack)",
+          "group": "name@2"
+        },
+        {
+          "command": "worktreeReview.checkoutPrBranch",
+          "when": "view == worktreeReview.changes && (viewItem == pr || viewItem == branch)",
+          "group": "navigation@1"
+        },
+        {
+          "command": "worktreeReview.checkoutInReviewWorktree",
+          "when": "view == worktreeReview.changes && (viewItem == pr || viewItem == branch) && worktreeReview.hasReviewWorktree",
+          "group": "navigation@2"
+        },
+        {
+          "command": "worktreeReview.openPrInBrowser",
+          "when": "view == worktreeReview.changes && viewItem == pr",
+          "group": "navigation@3"
+        },
+        {
+          "command": "worktreeReview.copyPrUrl",
+          "when": "view == worktreeReview.changes && viewItem == pr",
+          "group": "navigation@4"
+        },
+        {
+          "command": "worktreeReview.reviewPr",
+          "when": "view == worktreeReview.changes && (viewItem == pr || viewItem == prBody)",
+          "group": "navigation@5"
+        },
+        {
+          "command": "worktreeReview.compareBranchVersions",
+          "when": "view == worktreeReview.changes && (viewItem == pr || viewItem == branch)",
+          "group": "versions@1"
+        },
+        {
+          "command": "worktreeReview.compareVersionWithPrevious",
+          "when": "view == worktreeReview.changes && viewItem == version",
+          "group": "versions@1"
+        },
+        {
+          "command": "worktreeReview.compareVersionWithBase",
+          "when": "view == worktreeReview.changes && (viewItem == version || viewItem == versionFirst)",
+          "group": "versions@2"
+        },
+        {
+          "command": "worktreeReview.compareVersionWith",
+          "when": "view == worktreeReview.changes && (viewItem == version || viewItem == versionFirst)",
+          "group": "versions@3"
+        },
+        {
+          "command": "worktreeReview.markAllViewed",
+          "when": "view == worktreeReview.changes && (viewItem =~ /^worktree/ || viewItem == folder)",
+          "group": "viewed@1"
+        },
+        {
+          "command": "worktreeReview.markAllUnviewed",
+          "when": "view == worktreeReview.changes && (viewItem =~ /^worktree/ || viewItem == folder)",
+          "group": "viewed@2"
+        },
+        {
+          "command": "worktreeReview.resetViewed",
+          "when": "view == worktreeReview.changes && viewItem =~ /^worktree/",
+          "group": "viewed@3"
+        },
+        {
+          "command": "worktreeReview.copyComments",
+          "when": "view == worktreeReview.changes && (viewItem =~ /^worktree/ || viewItem == comments)",
+          "group": "comments@1"
+        },
+        {
+          "command": "worktreeReview.openCommentsFile",
+          "when": "view == worktreeReview.changes && (viewItem =~ /^worktree/ || viewItem == comments)",
+          "group": "comments@2"
+        },
+        {
+          "command": "worktreeReview.copyCommentsPath",
+          "when": "view == worktreeReview.changes && (viewItem =~ /^worktree/ || viewItem == comments)",
+          "group": "comments@3"
+        },
+        {
+          "command": "worktreeReview.clearComments",
+          "when": "view == worktreeReview.changes && viewItem == comments",
+          "group": "comments@4"
+        },
+        {
+          "command": "worktreeReview.copyInboxPath",
+          "when": "view == worktreeReview.changes && (viewItem =~ /^worktree/ || viewItem == comments)",
+          "group": "comments@5"
+        }
+      ],
+      "comments/commentThread/context": [
+        {
+          "command": "worktreeReview.createComment",
+          "when": "commentController == worktreeReview.comments && commentThreadIsEmpty",
+          "group": "inline"
+        },
+        {
+          "command": "worktreeReview.replyComment",
+          "when": "commentController == worktreeReview.comments && !commentThreadIsEmpty",
+          "group": "inline"
+        }
+      ],
+      "comments/commentThread/title": [
+        {
+          "command": "worktreeReview.toggleResolved",
+          "when": "commentController == worktreeReview.comments && commentThread == reviewThread",
+          "group": "navigation@1"
+        },
+        {
+          "command": "worktreeReview.deleteThread",
+          "when": "commentController == worktreeReview.comments && commentThread == reviewThread",
+          "group": "navigation@2"
+        }
+      ],
+      "comments/comment/title": [
+        {
+          "command": "worktreeReview.editComment",
+          "when": "commentController == worktreeReview.comments && comment == editable",
+          "group": "group@1"
+        },
+        {
+          "command": "worktreeReview.deleteComment",
+          "when": "commentController == worktreeReview.comments && comment == editable",
+          "group": "group@2"
+        }
+      ],
+      "comments/comment/context": [
+        {
+          "command": "worktreeReview.saveComment",
+          "when": "commentController == worktreeReview.comments",
+          "group": "inline@1"
+        },
+        {
+          "command": "worktreeReview.cancelEdit",
+          "when": "commentController == worktreeReview.comments",
+          "group": "inline@2"
+        }
+      ]
+    },
+    "markdown.previewScripts": [
+      "./media/preview-comments.js"
+    ],
+    "customEditors": [
+      {
+        "viewType": "worktreeReview.markdownPreview",
+        "displayName": "Markdown Review Preview",
+        "selector": [
+          {
+            "filenamePattern": "*.md"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "configuration": {
+      "title": "Worktree Stack Reviewer",
+      "properties": {
+        "worktreeReview.fallbackBase": {
+          "type": "string",
+          "default": "origin/main",
+          "description": "Base ref used when the branch is in no stack in `.git/gh-stack` (e.g. trunk branches or untracked branches)."
+        },
+        "worktreeReview.useStackParent": {
+          "type": "boolean",
+          "default": true,
+          "description": "Diff each worktree against its parent in the stack `gh stack` and `gt` keep in `.git/gh-stack`. Disable to always use the fallback base."
+        },
+        "worktreeReview.includeUncommitted": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include uncommitted working-tree changes in the file list and as the right side of each diff, rather than only committed changes (base...HEAD). Toggled from the view title bar."
+        },
+        "worktreeReview.showFileDecorations": {
+          "type": "boolean",
+          "default": false,
+          "description": "Let VS Code decorate worktree, folder, and file rows with editor problem badges and git status colours. Off by default: with several worktrees open, a language server indexing one of them reports errors against files in the others, and git colours a row by what the surrounding repository makes of its path — every row inside a worktree under an ignored directory such as `.claude/worktrees/` draws in the ignored grey, which describes where the worktree was put rather than the file under review."
+        },
+        "worktreeReview.hideViewed": {
+          "type": "boolean",
+          "default": false,
+          "description": "Keep files marked viewed out of the changed-file list. Toggled from the view title bar; the marks themselves are unaffected."
+        },
+        "worktreeReview.layout": {
+          "type": "string",
+          "enum": [
+            "flat",
+            "tree"
+          ],
+          "default": "tree",
+          "description": "Display changed files as a flat list or nested by folder. Single-child folder chains collapse automatically in tree mode."
+        },
+        "worktreeReview.pruneIntervalHours": {
+          "type": "number",
+          "default": 6,
+          "minimum": 0,
+          "description": "How often to archive comments whose branch no longer exists locally. A prune also runs at startup. Set to 0 to disable the timer; archived comments are written to comments.archive.json in the worktree's state directory and never deleted."
+        },
+        "worktreeReview.previewColumnWidth": {
+          "type": "number",
+          "default": 900,
+          "description": "How wide the review preview sets its text, in pixels, matching how GitHub renders a pull request body in a column rather than across the whole window. 0 lets the page run the full width of the tab, which is what a wide table wants."
+        },
+        "worktreeReview.reviewWorktreeName": {
+          "type": "string",
+          "default": "review",
+          "description": "Directory name of the worktree kept for reviewing. Any branch in the tree can be checked out into it, which leaves the worktree that branch is being written in untouched. The same name is used for the branch the worktree is reset to, which is created on trunk when the repository has no branch by that name. Set to an empty string to drop the actions from the menu."
+        },
+        "worktreeReview.hideAgentWorktreesOnTheirOwnBranch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Leave out an agent session's worktree \u2014 one named `bridge-cse_<id>` \u2014 while it is still on the branch named after it, `worktree-<that directory name>`. A session commits an empty marker on such a branch so that a sweep for unused worktrees leaves this one alone, and moves off it once it commits work of its own, so a worktree still on one has nothing to review. Worktrees created by hand are never left out, nor is one holding another worktree's marker branch."
+        },
+        "worktreeReview.showPullRequests": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the Stack section \u2014 every branch in each worktree's GitHub stack (`.git/gh-stack`), with its open PR when one exists. PR data requires the `gh` CLI installed and authenticated."
+        },
+        "worktreeReview.versionHistoryCommand": {
+          "type": "string",
+          "default": "gt-version-history",
+          "description": "Command that reads a branch's version history (the `vh` script). Nothing provides this yet: it needs a tool that constructs the history of a branch's patch. A bare name is resolved on PATH, then as `scripts/<name>` under the workspace repo; set an absolute path if the script lives elsewhere."
+        },
+        "worktreeReview.stateDirectory": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Where review state (comments, viewed marks, the agent inbox, stack and worktree names) is kept. Empty keeps it in each worktree's own git directory — `.git/wt-review/`, or `.git/worktrees/<name>/wt-review/` for a linked worktree — where git never sees it. A path relative to each worktree (e.g. `.wt-review`) keeps it there instead; it then needs ignoring in git. Absolute paths are not accepted. Reload the window after changing it; existing state is not moved."
+        },
+        "worktreeReview.gtCommand": {
+          "type": "string",
+          "default": "gt",
+          "description": "The `gt` CLI, which counts the lines each stack branch changes (`gt loc --json`). A bare name is resolved on PATH, then as `~/.cargo/bin/<name>`; set an absolute path if it lives elsewhere."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "build:core": "cargo build --release --manifest-path core/Cargo.toml",
+    "test": "npm run test:unit && npm run test:e2e",
+    "test:unit": "vitest run",
+    "test:e2e": "npm run compile && npm run build:core && tsc -p test && node out-test/e2e/runTest.js",
+    "package": "vsce package --out release.vsix",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^3.1.0",
+    "mocha": "^11.8.0",
+    "typescript": "^5.3.0",
+    "vitest": "^4.1.10",
+    "vscode-uri": "^3.1.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/naterarmstrong/worktree-stack-reviewer.git"
+  }
+}

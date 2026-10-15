@@ -1,0 +1,13 @@
+.vscode/**
+.vscode-test/**
+.claude/**
+src/**
+core/**
+test/**
+out-test/**
+vitest.config.mts
+.gitignore
+install.sh
+tsconfig.json
+**/*.map
+**/*.ts
