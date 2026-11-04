@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import { submitPrReview } from '../../src/gh';
+import { listOpenPrsForBranches, submitPrReview } from '../../src/gh';
 
 describe('submitPrReview', () => {
   let dir: string;
@@ -52,5 +52,65 @@ describe('submitPrReview', () => {
     await expect(submitPrReview(dir, 7, 'approve', '')).rejects.toThrow(
       'Can not approve your own pull request',
     );
+  });
+});
+
+describe('listOpenPrsForBranches', () => {
+  let dir: string;
+  let originalPath: string | undefined;
+
+  beforeEach(() => {
+    // A stand-in `gh` that records its arguments and prints a canned response.
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-gh-'));
+    fs.writeFileSync(
+      path.join(dir, 'gh'),
+      `#!/bin/sh\nprintf '%s\\n' "$@" > "${dir}/args"\ncat "${dir}/response"\n`,
+      { mode: 0o755 },
+    );
+    originalPath = process.env.PATH;
+    process.env.PATH = `${dir}${path.delimiter}${originalPath}`;
+  });
+
+  afterEach(() => {
+    process.env.PATH = originalPath;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const node = (number: number, head: string, owner: string) => ({
+    number,
+    title: `PR ${number}`,
+    isDraft: true,
+    url: `https://github.com/acme/widgets/pull/${number}`,
+    headRefName: head,
+    baseRefName: 'main',
+    body: 'body',
+    author: { login: 'someone' },
+    headRepositoryOwner: { login: owner },
+  });
+
+  test("passes branch names as variables and prefers the repository's own head", async () => {
+    fs.writeFileSync(
+      path.join(dir, 'response'),
+      JSON.stringify({
+        data: {
+          repository: {
+            owner: { login: 'acme' },
+            b0: { nodes: [node(9, 'feature/a', 'a-fork'), node(4, 'feature/a', 'acme')] },
+            b1: { nodes: [] },
+          },
+        },
+      }),
+    );
+    const prs = await listOpenPrsForBranches(dir, ['feature/a', '123']);
+    expect(prs.map((p) => p.number)).toEqual([4]);
+    const args = fs.readFileSync(path.join(dir, 'args'), 'utf8');
+    expect(args).toContain('h0=feature/a\n');
+    expect(args).toContain('-f\nh1=123\n');
+    expect(args).not.toContain('"feature/a"');
+  });
+
+  test('asks nothing for no branches', async () => {
+    expect(await listOpenPrsForBranches(dir, [])).toEqual([]);
+    expect(fs.existsSync(path.join(dir, 'args'))).toBe(false);
   });
 });

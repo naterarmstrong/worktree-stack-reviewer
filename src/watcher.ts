@@ -40,10 +40,16 @@ const REF_FILENAMES = new Set(['HEAD', 'packed-refs', 'gh-stack']);
  * updates, and reflog activity all churn `refs/` constantly. Watching
  * `logs/HEAD` does not reopen that: a fetch writes `FETCH_HEAD` and
  * `logs/refs/remotes/*`, leaving `logs/HEAD` untouched.
+ *
+ * The exception is the refs worktrees diff against. A base can move without
+ * any worktree's HEAD moving (`gt sync` fast-forwards trunk that way), so
+ * `logs/refs` is watched recursively and every name but those bases is dropped,
+ * which leaves a fetch's churn filtered out.
  */
 export class WorktreeWatcher implements vscode.Disposable {
   private watchers: fs.FSWatcher[] = [];
   private watchedGitDirs: string[] = [];
+  private baseRefs: ReadonlySet<string> = new Set();
   private debounce: NodeJS.Timeout | undefined;
   private suppressDepth = 0;
   private suppressUntil = 0;
@@ -65,10 +71,18 @@ export class WorktreeWatcher implements vscode.Disposable {
       this.watchDir(dir, false);
       this.watchDir(path.join(dir, 'logs'), false);
       this.watchDir(path.join(dir, 'worktrees'), true);
+      this.watchDir(path.join(dir, 'logs', 'refs'), true, (filename) =>
+        isBaseReflog(filename, this.baseRefs),
+      );
     }
     log().info(
       `watcher: tracking ${this.watchers.length} directories across ${sorted.length} gitdirs`,
     );
+  }
+
+  /** The refs worktrees currently diff against, as `fallbackBase` and stacks name them. */
+  setBaseRefs(bases: Iterable<string>): void {
+    this.baseRefs = new Set(bases);
   }
 
   /**
@@ -99,16 +113,20 @@ export class WorktreeWatcher implements vscode.Disposable {
     return this.suppressDepth > 0 || Date.now() < this.suppressUntil;
   }
 
-  private watchDir(p: string, recursive: boolean): void {
+  private watchDir(
+    p: string,
+    recursive: boolean,
+    accepts: (filename: string | null) => boolean = isRefFile,
+  ): void {
     if (!fs.existsSync(p)) return;
     try {
       this.watchers.push(
         fs.watch(p, { recursive }, (_event, filename) => {
-          if (isRefFile(filename)) this.fire();
+          if (accepts(filename)) this.fire();
         }),
       );
     } catch {
-      if (recursive) this.watchDir(p, false);
+      if (recursive) this.watchDir(p, false, accepts);
     }
   }
 
@@ -168,6 +186,17 @@ async function resolveGitDirs(worktreePath: string): Promise<string[]> {
 function isRefFile(filename: string | null): boolean {
   if (filename === null) return false;
   return REF_FILENAMES.has(path.basename(filename));
+}
+
+/**
+ * Whether a path under `logs/refs` is the reflog of one of `bases`. A local
+ * branch logs to `heads/<name>` and a remote-tracking ref to
+ * `remotes/<remote>/<name>`, so `main` and `origin/main` each match their own.
+ */
+export function isBaseReflog(filename: string | null, bases: ReadonlySet<string>): boolean {
+  if (filename === null) return false;
+  const ref = filename.split(path.sep).join('/');
+  return bases.has(ref.replace(/^(heads|remotes)\//, ''));
 }
 
 function sameList(a: string[], b: string[]): boolean {

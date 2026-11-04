@@ -1,9 +1,4 @@
-import * as os from 'node:os';
-import * as path from 'node:path';
-import * as vscode from 'vscode';
-import { execTimed } from './exec';
-
-const DEFAULT_COMMAND = 'gt';
+import { runGt } from './gt';
 
 /**
  * Buckets as `gt loc` names them, in the order they are displayed. gt owns the
@@ -32,7 +27,7 @@ interface GtLines {
   del: number;
 }
 
-type GtSplit = Record<Bucket, GtLines>;
+export type GtSplit = Record<Bucket, GtLines>;
 
 /** The fields of `gt loc --json` read here. */
 export interface GtLoc {
@@ -42,9 +37,7 @@ export interface GtLoc {
 }
 
 /** Carries gt's own stderr message when it exits non-zero. */
-export class GtLocError extends Error {}
-
-let workingCommand: string | undefined;
+export { GtError as GtLocError } from './gt';
 
 /**
  * What a branch changes, as `gt loc` measures it: the branch's own commits,
@@ -55,8 +48,45 @@ export async function branchLocSummary(
   cwd: string,
   branch: string,
 ): Promise<LocSummary> {
-  const stdout = await runGt(cwd, ['loc', branch, '--json']);
-  return summarizeGtLoc(JSON.parse(stdout) as GtLoc);
+  return summarizeGtLoc(await readGtLoc(cwd, branch));
+}
+
+/** `gt loc --json` for a branch, or for a commit when there is no branch. */
+export async function readGtLoc(cwd: string, target: string): Promise<GtLoc> {
+  const stdout = await runGt(cwd, ['loc', target, '--json']);
+  return JSON.parse(stdout) as GtLoc;
+}
+
+/** gt's split for each file it counted, keyed by path. */
+export function fileSplits(loc: GtLoc): Map<string, GtSplit> {
+  return new Map(loc.files.map((f) => [f.path, f.lines]));
+}
+
+/**
+ * A file row's lines by bucket, in display order with empty buckets left out.
+ * Only when gt's lines add up to the row's own counts: the row may measure
+ * from a different base than gt does, or include uncommitted edits gt never
+ * sees, and a split of some other change would put the wrong numbers beside
+ * the file. Undefined means the row keeps its overall count.
+ */
+export function fileBuckets(
+  added: number | undefined,
+  removed: number | undefined,
+  split: GtSplit | undefined,
+): [Bucket, BucketTotals][] | undefined {
+  if (!split || added === undefined || removed === undefined) return undefined;
+  const buckets: [Bucket, BucketTotals][] = [];
+  let add = 0;
+  let del = 0;
+  for (const bucket of BUCKETS) {
+    const lines = split[bucket];
+    add += lines.add;
+    del += lines.del;
+    if (lines.add === 0 && lines.del === 0) continue;
+    buckets.push([bucket, { files: 1, added: lines.add, removed: lines.del }]);
+  }
+  if (add !== added || del !== removed || buckets.length === 0) return undefined;
+  return buckets;
 }
 
 /**
@@ -92,48 +122,3 @@ function emptySummary(): LocSummary {
   return { files: 0, added: 0, removed: 0, buckets };
 }
 
-/**
- * Runs gt. The configured command is tried first; when it's the default bare
- * name, `~/.cargo/bin/gt` is tried too, since the VS Code server process often
- * lacks the shell profile that puts cargo's bin directory on PATH. Whichever
- * command runs is remembered for subsequent calls.
- */
-async function runGt(cwd: string, args: string[]): Promise<string> {
-  const configured = vscode.workspace
-    .getConfiguration('worktreeReview')
-    .get<string>('gtCommand', DEFAULT_COMMAND);
-  const candidates: string[] = [];
-  if (workingCommand) candidates.push(workingCommand);
-  candidates.push(configured);
-  if (configured === DEFAULT_COMMAND) {
-    candidates.push(path.join(os.homedir(), '.cargo', 'bin', DEFAULT_COMMAND));
-  }
-  for (const command of new Set(candidates)) {
-    try {
-      const stdout = await execTimed(
-        command,
-        args,
-        cwd,
-        `${path.basename(command)} ${args.join(' ')}`,
-      );
-      workingCommand = command;
-      return stdout;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        if (workingCommand === command) workingCommand = undefined;
-        continue;
-      }
-      throw new GtLocError(gtError(err));
-    }
-  }
-  throw new GtLocError(
-    `'${configured}' not found — install gt or set worktreeReview.gtCommand to its path`,
-  );
-}
-
-/** gt reports failures as `Error: …` on stderr before exiting 1. */
-function gtError(err: unknown): string {
-  const stderr = (err as { stderr?: string }).stderr?.trim() ?? '';
-  if (stderr) return stderr.replace(/^Error:\s*/, '');
-  return err instanceof Error ? err.message.split('\n')[0] : String(err);
-}

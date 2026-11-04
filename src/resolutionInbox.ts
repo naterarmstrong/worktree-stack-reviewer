@@ -10,6 +10,7 @@ import {
   inboxPathFor,
   rejectedPathFor,
 } from './commentStore';
+import { parseExplainerEntry } from './explainers';
 import { describeError, log } from './log';
 
 const DEBOUNCE_MS = 400;
@@ -140,7 +141,8 @@ async function claimBatch(worktreePath: string): Promise<InboxEntry[]> {
  * shapes readily and rejecting one on a technicality only creates a retry loop.
  *
  * An entry with an `id` is a resolution of that thread; one with a `file` and
- * a `body` and no `id` is a note to open. Anything else is skipped.
+ * a `body` and no `id` is a note to open; one with `"kind": "explainer"`
+ * reports on a PR's explainer page. Anything else is skipped.
  */
 export function parseEntries(raw: string): InboxEntry[] {
   const parsed = JSON.parse(raw) as unknown;
@@ -153,6 +155,11 @@ export function parseEntries(raw: string): InboxEntry[] {
   const entries: InboxEntry[] = [];
   for (const item of list) {
     if (!item || typeof item !== 'object') continue;
+    const explainer = parseExplainerEntry(item as Record<string, unknown>);
+    if (explainer) {
+      entries.push(explainer);
+      continue;
+    }
     const resolution = parseResolution(item as Record<string, unknown>);
     if (resolution) {
       entries.push(resolution);

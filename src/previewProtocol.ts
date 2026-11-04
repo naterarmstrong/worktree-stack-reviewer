@@ -12,6 +12,8 @@ export interface ThreadCommentView {
   author: string;
   body: string;
   createdAt: string;
+  /** An agent's comment the reviewer has not seen yet. */
+  unread?: boolean;
 }
 
 /** What the webview needs to draw one thread. A subset of `StoredThread`. */

@@ -2,7 +2,7 @@
   "name": "worktree-stack-reviewer",
   "displayName": "Worktree Stack Reviewer",
   "description": "Worktree review with editable diffs and inline comments, scoped to the GitHub stack parent (gh stack / gt).",
-  "version": "0.17.0",
+  "version": "0.18.2",
   "publisher": "naterarmstrong",
   "private": true,
   "license": "MIT",
@@ -158,6 +158,11 @@
         "category": "Worktree Stack Reviewer"
       },
       {
+        "command": "worktreeReview.openExplainer",
+        "title": "Open Explainer",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
         "command": "worktreeReview.reviewPr",
         "title": "Review Pull Request\u2026",
         "icon": "$(code-review)",
@@ -244,6 +249,11 @@
         "category": "Worktree Stack Reviewer"
       },
       {
+        "command": "worktreeReview.markCommentRead",
+        "title": "Mark as Read",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
         "command": "worktreeReview.copyComments",
         "title": "Copy Comments as JSON",
         "icon": "$(clippy)",
@@ -288,6 +298,10 @@
     ],
     "menus": {
       "commandPalette": [
+        {
+          "command": "worktreeReview.openExplainer",
+          "when": "false"
+        },
         {
           "command": "worktreeReview.addCommentFromPreview",
           "when": "false"
@@ -462,6 +476,11 @@
           "command": "worktreeReview.copyInboxPath",
           "when": "view == worktreeReview.changes && (viewItem =~ /^worktree/ || viewItem == comments)",
           "group": "comments@5"
+        },
+        {
+          "command": "worktreeReview.markCommentRead",
+          "when": "view == worktreeReview.changes && viewItem == commentThreadUnread",
+          "group": "comments@1"
         }
       ],
       "comments/commentThread/context": [
@@ -591,11 +610,6 @@
           "default": true,
           "description": "Show the Stack section \u2014 every branch in each worktree's GitHub stack (`.git/gh-stack`), with its open PR when one exists. PR data requires the `gh` CLI installed and authenticated."
         },
-        "worktreeReview.versionHistoryCommand": {
-          "type": "string",
-          "default": "gt-version-history",
-          "description": "Command that reads a branch's version history (the `vh` script). Nothing provides this yet: it needs a tool that constructs the history of a branch's patch. A bare name is resolved on PATH, then as `scripts/<name>` under the workspace repo; set an absolute path if the script lives elsewhere."
-        },
         "worktreeReview.stateDirectory": {
           "type": "string",
           "default": "",
@@ -604,7 +618,7 @@
         "worktreeReview.gtCommand": {
           "type": "string",
           "default": "gt",
-          "description": "The `gt` CLI, which counts the lines each stack branch changes (`gt loc --json`). A bare name is resolved on PATH, then as `~/.cargo/bin/<name>`; set an absolute path if it lives elsewhere."
+          "description": "The `gt` CLI, which counts the lines each stack branch changes (`gt loc --json`) and reads each branch's patch versions (`gt history --json`). A bare name is resolved on PATH, then as `~/.cargo/bin/<name>`; set an absolute path if it lives elsewhere."
         }
       }
     }

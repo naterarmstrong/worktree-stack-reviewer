@@ -23,11 +23,14 @@ import {
 } from './git';
 import { type ClaudeSession, liveSessionsIn } from './claudeSessions';
 import type { ExportMeta, ReviewCommentController } from './commentController';
-import type { StoredThread } from './commentStore';
+import { type StoredThread, unreadCount } from './commentStore';
+import { unreadRowUri } from './unreadMark';
 import type { CompareLink } from './compareLink';
+import { EXPLAINER_STALL_MS, type ExplainerState, type ExplainerStore } from './explainers';
 import {
   type OpenPr,
   listOpenPrs,
+  listOpenPrsForBranches,
   prCommentCountsBySha,
 } from './gh';
 import { buildGitUri } from './gitContentProvider';
@@ -44,12 +47,17 @@ import {
   PREVIEW_EDITOR_VIEW_TYPE,
   type ReviewPreviewEditorProvider,
 } from './previewEditor';
+import type { HtmlPreviews } from './htmlPreview';
 import { rowUri, undecoratedRowUri } from './rowUri';
 import {
   type Bucket,
   type BucketTotals,
+  type GtSplit,
   type LocSummary,
   branchLocSummary,
+  fileBuckets,
+  fileSplits,
+  readGtLoc,
 } from './stackLoc';
 import { type ResolvedStack, StackNameStore, stackPosition } from './stackNames';
 import { WorktreeNameStore } from './worktreeNames';
@@ -100,6 +108,9 @@ interface TrieDir {
 /** Reports whether a changed file is marked viewed on its worktree's branch. */
 type ViewedLookup = (file: ChangedFile) => ViewedStatus;
 
+/** gt's src/test/doc/gen split of a changed file, when gt counted it. */
+type SplitLookup = (file: ChangedFile) => GtSplit | undefined;
+
 /**
  * Per-worktree computed state, keyed by HEAD sha. A branch switch moves only
  * that worktree's HEAD, so a refresh recomputes the changed worktree and reads
@@ -111,8 +122,19 @@ interface WorktreeCacheEntry {
   branch: string;
   stack?: StackInfo;
   changedFiles?: ChangedFile[];
+  /**
+   * `gt loc`'s per-file split of the branch, which labels the changed-file
+   * rows. Empty when gt could not count it; the rows then show totals only.
+   */
+  fileSplits?: Map<string, GtSplit>;
   /** Diff base resolved for this worktree; retained for comment export. */
   base?: string;
+  /**
+   * Where HEAD left `base`, the left side of `changedFiles`. `head` doesn't
+   * cover it: the base can move under an unchanged HEAD, and until a stale
+   * trunk catches up it sits behind commits the branch was rebased onto.
+   */
+  mergeBase?: string;
 }
 
 /** A branch whose version listing the prefetcher still has to read. */
@@ -272,19 +294,23 @@ class FileNode extends vscode.TreeItem {
     /** Version of the branch that last changed this file, when known. */
     lastVersion: number | undefined,
     viewedStatus: ViewedStatus,
+    split: GtSplit | undefined,
   ) {
     super(path.basename(file.path), vscode.TreeItemCollapsibleState.None);
     this.id = `file:${worktreePath}:${file.path}`;
     const dir = path.dirname(file.path);
     const bits: string[] = [file.status];
     if (showDir && dir !== '.') bits.push(dir);
-    const counts = lineCountLabel(file.added, file.removed);
+    const buckets = fileBuckets(file.added, file.removed, split);
+    const counts = buckets
+      ? buckets.map(([b, t]) => `${b} ${lineCountLabel(t.added, t.removed)}`).join('  ')
+      : lineCountLabel(file.added, file.removed);
     if (counts) bits.push(counts);
     const provenance = provenanceLabel(file, lastVersion);
     if (provenance) bits.push(provenance);
     if (viewedStatus.baseMoved) bits.push('rebased since viewed');
     this.description = bits.join('  ');
-    this.tooltip = fileTooltip(file, lastVersion, viewedStatus);
+    this.tooltip = fileTooltip(file, lastVersion, viewedStatus, buckets);
     this.resourceUri = rowUri(path.join(worktreePath, file.path));
     // A file with no patch id has no identity to mark viewed against, so it
     // gets no checkbox rather than one that would never stay ticked.
@@ -638,6 +664,55 @@ class PrBodyNode extends vscode.TreeItem {
   }
 }
 
+/**
+ * A PR's explainer page, right below its description: a spinner while the
+ * agent writing it works, then a row that opens it. The agent reports both
+ * through the inbox (`"kind": "explainer"`). A failed run, or one that has
+ * gone quiet for half an hour, says so instead of spinning.
+ */
+class ExplainerNode extends vscode.TreeItem {
+  constructor(
+    worktreePath: string,
+    pr: OpenPr,
+    public readonly state: ExplainerState,
+    now = Date.now(),
+  ) {
+    super('Explainer', vscode.TreeItemCollapsibleState.None);
+    this.id = `explainer:${worktreePath}:${pr.number}`;
+    const page = state.path ? path.basename(state.path) : undefined;
+    const since = (iso: string | undefined) =>
+      iso
+        ? ` since ${new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+        : '';
+    if (state.status === 'started') {
+      const stalled = state.startedAt && now - Date.parse(state.startedAt) > EXPLAINER_STALL_MS;
+      this.iconPath = new vscode.ThemeIcon(stalled ? 'warning' : 'loading~spin');
+      this.description = stalled ? 'no word from the agent' : 'writing…';
+      this.tooltip = `An agent has been writing #${pr.number}'s explainer${since(state.startedAt)}.`;
+      if (stalled) this.tooltip += ' It has not reported back in 30 minutes; it may have stopped.';
+      this.contextValue = 'explainerPending';
+    } else if (state.status === 'failed') {
+      this.iconPath = new vscode.ThemeIcon('error');
+      this.description = shortError(state.error ?? 'failed');
+      this.tooltip = `Writing #${pr.number}'s explainer failed: ${state.error ?? 'no reason given'}`;
+      if (page) this.tooltip += `\n\nClick to open the last one written (${page}).`;
+      this.contextValue = 'explainerFailed';
+    } else {
+      this.iconPath = new vscode.ThemeIcon('preview');
+      this.description = state.title ?? page;
+      this.tooltip = `Open #${pr.number}'s explainer beside the editor.\n\n${state.path}`;
+      this.contextValue = 'explainer';
+    }
+    if (state.status !== 'started' && state.path) {
+      this.command = {
+        command: 'worktreeReview.openExplainer',
+        title: 'Open Explainer',
+        arguments: [this],
+      };
+    }
+  }
+}
+
 class VersionNode extends vscode.TreeItem {
   constructor(
     public readonly worktreePath: string,
@@ -698,8 +773,9 @@ class CommentsSectionNode extends vscode.TreeItem {
     public readonly diff: CommentDiff | undefined,
   ) {
     const unresolved = threads.filter((t) => !t.resolved).length;
+    const unread = threads.reduce((n, t) => n + unreadCount(t), 0);
     super(
-      `Comments (${unresolved} open / ${threads.length})`,
+      `Comments (${unresolved} open / ${threads.length}${unread > 0 ? `, ${unread} new` : ''})`,
       // Collapsed under a branch row, which already carries several sections
       // and a version list; expanded under a worktree, where it is the review
       // list for the branch in hand.
@@ -784,13 +860,18 @@ class CommentThreadNode extends vscode.TreeItem {
     const flags: string[] = [where];
     if (thread.side === 'base') flags.push('base');
     if (thread.drifted) flags.push('drifted');
-    if (thread.comments.length > 1) flags.push(`${thread.comments.length} replies`);
+    const replies = thread.comments.length - 1;
+    if (replies > 0) flags.push(replies === 1 ? '1 reply' : `${replies} replies`);
     this.description = flags.join(' · ');
     this.iconPath = new vscode.ThemeIcon(threadIcon(thread));
+    const unread = unreadCount(thread);
+    // The dot is a decoration badge rather than a second icon: a row has one
+    // icon slot, and that one already says what kind of thread this is.
+    if (unread > 0) this.resourceUri = unreadRowUri(thread.id, unread);
     this.tooltip = new vscode.MarkdownString(
       thread.comments.map((c) => `**${c.author}**\n\n${c.body}`).join('\n\n---\n\n'),
     );
-    this.contextValue = 'commentThread';
+    this.contextValue = unread > 0 ? 'commentThreadUnread' : 'commentThread';
     this.command = {
       command: 'worktreeReview.revealComment',
       title: 'Reveal Comment',
@@ -816,6 +897,11 @@ export class WorktreeProvider
   private prCache: OpenPr[] | undefined;
   private prCacheError: string | undefined;
   private prCacheAt = 0;
+  /**
+   * Branches already looked up by name since the PR list was last fetched,
+   * found or not, so a branch with no PR is asked about once per fetch.
+   */
+  private readonly prBranchesLookedUp = new Set<string>();
   /** Review-comment counts per commit sha, keyed by PR number. */
   private readonly prCommentCache = new Map<
     number,
@@ -890,6 +976,8 @@ export class WorktreeProvider
     private readonly comments: ReviewCommentController,
     private readonly prBodies: PrBodyContentProvider,
     private readonly preview: ReviewPreviewEditorProvider,
+    private readonly explainers: ExplainerStore,
+    private readonly htmlPreviews: HtmlPreviews,
   ) {
     const folder = vscode.workspace.workspaceFolders?.[0];
     this.repoPath = folder?.uri.fsPath ?? process.cwd();
@@ -928,6 +1016,7 @@ export class WorktreeProvider
         element.trie,
         this.lastVersionsFor(element.worktreePath),
         this.viewedLookup(element.worktreePath),
+        this.splitLookup(element.worktreePath),
       );
     }
     return [];
@@ -947,7 +1036,7 @@ export class WorktreeProvider
   /**
    * Which version of the worktree's branch last changed each file, read from
    * the version cache without waiting on it. The listing costs a
-   * `gt-version-history` run, so the file rows render without these labels and
+   * `gt history` run, so the file rows render without these labels and
    * pick them up when the background prefetch lands. A cached listing computed
    * at a different tip is ignored: an amend both moves the tip and rewrites the
    * versions, so those labels would name the wrong patches.
@@ -958,6 +1047,11 @@ export class WorktreeProvider
     const cached = this.versionCache.get(entry.branch);
     if (!cached || cached.tip !== entry.head) return new Map();
     return lastTouchedVersions(cached.listing);
+  }
+
+  private splitLookup(worktreePath: string): SplitLookup {
+    const splits = this.worktreeCache.get(worktreePath)?.fileSplits;
+    return (file) => splits?.get(file.path);
   }
 
   private getRootNodes(): Promise<Node[]> {
@@ -1004,6 +1098,7 @@ export class WorktreeProvider
     // Awaited for the same reason as the viewed store: a named row would
     // otherwise render under its branch name on the first pass.
     await this.loadNames();
+    await this.explainers.load();
     await this.worktreeNames.prune(worktrees.map((w) => w.path)).catch((err) => {
       log().warn(`names: prune failed: ${describeError(err)}`);
     });
@@ -1047,6 +1142,12 @@ export class WorktreeProvider
         const base = parent ?? fallbackBase;
         const source: 'stack' | 'fallback' = parent ? 'stack' : 'fallback';
         entry.base = base;
+        const mergeBase = await resolveMergeBase(w.path, base).catch(() => undefined);
+        if (mergeBase !== entry.mergeBase) {
+          entry.mergeBase = mergeBase;
+          entry.changedFiles = undefined;
+          entry.fileSplits = undefined;
+        }
         const stack = this.resolveStackName(w.path);
         return new WorktreeNode(
           w,
@@ -1058,6 +1159,8 @@ export class WorktreeProvider
         );
       }),
     );
+    this.watcher.setBaseRefs(nodes.map((n) => n.base));
+    if (showPullRequests) await this.fillMissingPrs(shown);
     // Started from here rather than only from the branch rows: a refresh the
     // watcher fired because a branch moved re-renders those rows with counts
     // that are now stale, and nothing on the row itself knows that.
@@ -1098,6 +1201,8 @@ export class WorktreeProvider
     try {
       this.prCache = await listOpenPrs(this.repoPath);
       this.prCacheError = undefined;
+      // The fresh list drops whatever the lookup added, so ask again.
+      this.prBranchesLookedUp.clear();
       this.prBodies.setBodies(this.prCache);
       log().info(
         `fetched ${this.prCache.length} open PRs from gh in ${elapsed(start)}`,
@@ -1108,6 +1213,43 @@ export class WorktreeProvider
       log().error(`gh pr list failed: ${describeError(err)}`);
     }
     this.prCacheAt = Date.now();
+  }
+
+  /**
+   * Adds the PRs of shown branches that the newest-200 list missed, looked up
+   * by branch name. Runs once the stacks are read, since those name the
+   * branches whose rows want a PR.
+   */
+  private async fillMissingPrs(worktrees: Worktree[]): Promise<void> {
+    const cache = this.prCache;
+    if (!cache) return;
+    const have = new Set(cache.map((p) => p.headRefName));
+    const missing = new Set<string>();
+    for (const w of worktrees) {
+      for (const { branch } of stackEntries(
+        this.cacheEntry(w).stack,
+        w.branch,
+        this.trunkBranch(),
+      )) {
+        if (!have.has(branch) && !this.prBranchesLookedUp.has(branch)) missing.add(branch);
+      }
+    }
+    if (missing.size === 0) return;
+    const branches = [...missing];
+    // Marked before the call: a failed lookup waits for the next fetch rather
+    // than retrying on every render.
+    for (const b of branches) this.prBranchesLookedUp.add(b);
+    const start = Date.now();
+    try {
+      const found = await listOpenPrsForBranches(this.repoPath, branches);
+      cache.push(...found);
+      this.prBodies.setBodies(found);
+      log().info(
+        `looked up ${branches.length} branch(es) missing from the PR list: found ${found.length} in ${elapsed(start)}`,
+      );
+    } catch (err) {
+      log().warn(`gh pr lookup by branch failed: ${describeError(err)}`);
+    }
   }
 
   private async getWorktreeChildren(parent: WorktreeNode): Promise<Node[]> {
@@ -1124,7 +1266,11 @@ export class WorktreeProvider
       if (stack.entries.length > 0) sections.push(stack);
       // The worktree's own PR, read at the top of its files.
       const pr = this.prCache?.find((p) => p.headRefName === parent.worktree.branch);
-      if (pr) sections.push(new PrBodyNode(parent.worktree.path, pr, true));
+      if (pr) {
+        sections.push(new PrBodyNode(parent.worktree.path, pr, true));
+        const explainer = this.explainers.get(pr.number);
+        if (explainer) sections.push(new ExplainerNode(parent.worktree.path, pr, explainer));
+      }
     }
     const commentsSection = this.buildCommentsSection(parent);
     if (commentsSection) sections.push(commentsSection);
@@ -1543,6 +1689,8 @@ export class WorktreeProvider
     ];
     if (node.pr) {
       rows.push(new PrBodyNode(node.worktreePath, node.pr));
+      const explainer = this.explainers.get(node.pr.number);
+      if (explainer) rows.push(new ExplainerNode(node.worktreePath, node.pr, explainer));
     }
     const comments = this.buildBranchCommentsSection(node);
     if (comments) rows.push(comments);
@@ -1639,7 +1787,7 @@ export class WorktreeProvider
       return pending;
     }
 
-    const fetch = listVersions(this.repoPath, worktreePath, branch)
+    const fetch = listVersions(worktreePath, branch)
       .then((listing) => {
         this.versionCache.set(branch, { tip, listing });
         log().info(
@@ -1713,8 +1861,8 @@ export class WorktreeProvider
   /**
    * Fills the version cache for the branches already shown in the stack.
    *
-   * Expanding a branch otherwise costs a full gt-version-history run, which is
-   * around a second on an idle machine and several times that on a busy one.
+   * Expanding a branch otherwise costs a `gt history` run: tens of milliseconds
+   * once gt's cache is warm, but up to a second or more when it is cold.
    * Fetching ahead of the click turns the expansion into a cache read.
    *
    * Strictly one branch at a time: these listings are not urgent, and
@@ -1740,7 +1888,7 @@ export class WorktreeProvider
           fetched += 1;
         } catch (err) {
           // A branch with no reflog of its own has no versions to read.
-          // Expanding it runs the script again and shows what it said.
+          // Expanding it runs gt again and shows what it said.
           log().debug(
             `versions: prefetch skipped ${target.branch}: ${describeError(err)}`,
           );
@@ -1945,12 +2093,14 @@ export class WorktreeProvider
     const entry = this.cacheEntry(parent.worktree);
     if (entry.changedFiles === undefined) {
       const start = Date.now();
+      const splits = this.readFileSplits(parent.worktree);
       try {
         entry.changedFiles = await listChangedFiles(
           parent.worktree.path,
           parent.base,
           includeUncommitted,
         );
+        entry.fileSplits = await splits;
         log().info(
           `worktree ${parent.worktree.branch}: ${entry.changedFiles.length} changed files vs ${parent.base} in ${elapsed(start)}`,
         );
@@ -1965,6 +2115,7 @@ export class WorktreeProvider
     if (all.length === 0) return [new MessageNode('No changes vs base.')];
     const lastVersions = this.lastVersionsFor(parent.worktree.path);
     const viewedOf = this.viewedLookup(parent.worktree.path);
+    const splitOf = this.splitLookup(parent.worktree.path);
     const hideViewed = config.get<boolean>('hideViewed', false);
     const files = hideViewed ? all.filter((f) => !viewedOf(f).viewed) : all;
     if (files.length === 0) {
@@ -1980,6 +2131,7 @@ export class WorktreeProvider
             true,
             lastVersions.get(f.path),
             viewedOf(f),
+            splitOf(f),
           ),
       );
     }
@@ -1991,7 +2143,24 @@ export class WorktreeProvider
       trie,
       lastVersions,
       viewedOf,
+      splitOf,
     );
+  }
+
+  /**
+   * gt's split of what the checked-out branch changes. A failure costs only
+   * the labels, so it is logged and the rows fall back to their totals.
+   */
+  private async readFileSplits(worktree: Worktree): Promise<Map<string, GtSplit>> {
+    const start = Date.now();
+    try {
+      const splits = fileSplits(await readGtLoc(worktree.path, worktree.branch));
+      log().info(`loc: split ${splits.size} file(s) of ${worktree.branch} in ${elapsed(start)}`);
+      return splits;
+    } catch (err) {
+      log().warn(`loc: ${worktree.branch} file split: ${describeError(err)}`);
+      return new Map();
+    }
   }
 
   async openDiff(args: OpenDiffArgs): Promise<void> {
@@ -2333,6 +2502,14 @@ export class WorktreeProvider
    * markdown view a file gets, over a read-only document served from the PR
    * list the tree already holds.
    */
+  /** Opens a finished explainer's page; a row still being written has nothing to open. */
+  async openExplainer(item: unknown): Promise<void> {
+    if (!(item instanceof ExplainerNode)) return;
+    const { state } = item;
+    if (state.status === 'started' || !state.path) return;
+    await this.htmlPreviews.show(state.path);
+  }
+
   async openPrBody(item: unknown): Promise<void> {
     if (!(item instanceof PrBodyNode)) return;
     const uri = buildPrBodyUri(
@@ -2489,7 +2666,6 @@ export class WorktreeProvider
     const start = Date.now();
     try {
       const result = await compareVersions(
-        this.repoPath,
         worktreePath,
         branch,
         a,
@@ -2643,9 +2819,15 @@ export class WorktreeProvider
     };
   }
 
+  async markCommentRead(item: unknown): Promise<void> {
+    if (!(item instanceof CommentThreadNode)) return;
+    await this.comments.markRead(item.thread.id);
+  }
+
   async revealComment(item: unknown): Promise<void> {
     if (!(item instanceof CommentThreadNode)) return;
     const { worktreePath, base, thread, diff } = item;
+    void this.comments.markRead(thread.id);
     try {
       // A description has no source editor to open at a line, so its thread is
       // revealed where it was written: in the rendered preview. This holds
@@ -2873,9 +3055,11 @@ export class WorktreeProvider
     this.viewed.clear();
     this.stackNames.clear();
     this.worktreeNames.clear();
+    this.explainers.clear();
     this.prCache = undefined;
     this.prCacheError = undefined;
     this.prCacheAt = 0;
+    this.prBranchesLookedUp.clear();
     this.prCommentCache.clear();
     this.prCommentsPrefetched.clear();
     this.refresh();
@@ -2921,7 +3105,7 @@ const LABEL_MAX_CHARS = 80;
 
 /**
  * A row's description has far less room than its tooltip, and these errors
- * repeat on every branch in every stack — a missing `gt-version-history` puts
+ * repeat on every branch in every stack — a missing `gt` puts
  * the same sentence on all of them. The tooltip keeps the whole message.
  */
 const ROW_ERROR_MAX_CHARS = 48;
@@ -3007,6 +3191,7 @@ function buildNodes(
   trie: TrieDir,
   lastVersions: Map<string, number>,
   viewedOf: ViewedLookup,
+  splitOf: SplitLookup,
 ): Node[] {
   const nodes: Node[] = [];
   const dirNames = Array.from(trie.dirs.keys()).sort();
@@ -3031,6 +3216,7 @@ function buildNodes(
         false,
         lastVersions.get(f.path),
         viewedOf(f),
+        splitOf(f),
       ),
     );
   }
@@ -3104,6 +3290,7 @@ function fileTooltip(
   file: ChangedFile,
   lastVersion: number | undefined,
   viewedStatus: ViewedStatus,
+  buckets: [Bucket, BucketTotals][] | undefined,
 ): string {
   const lines = [
     file.oldPath
@@ -3112,6 +3299,11 @@ function fileTooltip(
   ];
   const counts = lineCountLabel(file.added, file.removed);
   lines.push(counts ? `${counts} vs base` : 'binary or uncounted');
+  if (buckets && buckets.length > 1) {
+    for (const [bucket, totals] of buckets) {
+      lines.push(`  ${bucket}: ${lineCountLabel(totals.added, totals.removed)}`);
+    }
+  }
   lines.push(`last changed: ${lastChangedDetail(file, lastVersion)}`);
   lines.push(`review: ${reviewDetail(file, viewedStatus)}`);
   return lines.join('\n');

@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'vitest';
-import { type BranchVersion, versionForComment } from '../../src/versionHistory';
+import {
+  type BranchVersion,
+  fromGt,
+  lastTouchedVersions,
+  versionForComment,
+} from '../../src/versionHistory';
 
 /**
  * A branch amended twice, as the listing arrives: newest first, each version
@@ -77,5 +82,83 @@ describe('versionForComment', () => {
 
   test('attributes nothing when the comment carries no readable date', () => {
     expect(versionForComment({ createdAt: 'whenever' }, VERSIONS)).toBeUndefined();
+  });
+});
+
+const lines = (add: number, del: number) => ({ add, del });
+const split = (src = lines(0, 0), test = lines(0, 0), gen = lines(0, 0)) => ({
+  src,
+  test,
+  doc: lines(0, 0),
+  gen,
+});
+
+/** `gt history --json` for a branch amended once after a restack, newest first. */
+const GT_LISTING = {
+  branch: 'feat',
+  parent: 'main',
+  tip: 'c2',
+  versions: [
+    {
+      version: 2,
+      sha: 'c2',
+      subject: 'Add feature',
+      time: 1,
+      date: '2026-10-16T13:00:00-07:00',
+      action: 'amend',
+      current: true,
+      remote: { pushed: false, fetched: false, tip: false },
+      moves: [{ sha: 'b2' }, { sha: 'c2' }],
+      delta: {
+        vs: 1,
+        conflict: false,
+        total: split(),
+        files: [
+          { path: 'uv.lock', kind: 'gen', lines: split(undefined, undefined, lines(40, 2)) },
+          { path: 'src/a.py', kind: 'src', lines: split(lines(3, 1)) },
+          { path: 'tests/test_a.py', kind: 'test', lines: split(undefined, lines(10, 0)) },
+        ],
+      },
+    },
+    {
+      version: 1,
+      sha: 'a1',
+      subject: 'Add feature',
+      time: 0,
+      date: '2026-10-16T12:00:00-07:00',
+      action: 'commit',
+      current: false,
+      remote: { pushed: false, fetched: true, tip: true },
+      moves: [{ sha: 'a1' }],
+      delta: { vs: null, conflict: true, total: split(), files: [] },
+    },
+  ],
+};
+
+describe('fromGt', () => {
+  const listing = fromGt(GT_LISTING);
+  const [p2, p1] = listing.versions;
+
+  test('keeps every sha a version held, oldest first', () => {
+    expect(p2.shas).toEqual(['b2', 'c2']);
+    expect(p2.current).toBe(true);
+  });
+
+  test('counts a version seen on the remote by a fetch as pushed', () => {
+    expect(p1.pushed).toBe(true);
+    expect(p2.pushed).toBe(false);
+  });
+
+  test('leaves generated files out of the totals and file list, biggest first', () => {
+    expect(p2.delta).toMatchObject({ added: 13, removed: 1, generated_hidden: 1 });
+    expect(p2.delta?.files?.map((f) => f.path)).toEqual(['tests/test_a.py', 'src/a.py']);
+  });
+
+  test('reports a conflicting interdiff without files', () => {
+    expect(p1.delta).toEqual({ conflict: true });
+  });
+
+  test('still attributes generated files to the version that changed them', () => {
+    expect(lastTouchedVersions(listing).get('uv.lock')).toBe(2);
   });
 });

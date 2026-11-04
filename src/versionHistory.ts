@@ -1,10 +1,7 @@
-import * as path from 'node:path';
-import * as vscode from 'vscode';
-import { execTimed } from './exec';
+import { GtError, runGt } from './gt';
 
-const DEFAULT_COMMAND = 'gt-version-history';
-
-// Field names are snake_case to mirror the script's JSON output verbatim.
+// Field names are snake_case, after the JSON `gt history` prints; `fromGt`
+// reshapes its listing into these.
 
 export interface VersionDeltaFile {
   added: number;
@@ -22,6 +19,11 @@ export interface VersionDelta {
   removed?: number;
   generated_hidden?: number;
   files?: VersionDeltaFile[];
+  /**
+   * The generated files left out of `files` and the totals. They still count
+   * for which version last touched a file.
+   */
+  generated_files?: string[];
 }
 
 /** One version (amend) of a stacked branch's single commit. */
@@ -54,7 +56,7 @@ export interface CompareFile {
 
 /**
  * A compare resolved to two tree objects. Diffing `left_tree` against
- * `right_tree` is the honest interdiff — the script has already re-applied
+ * `right_tree` is the honest interdiff — gt has already re-applied
  * the older patch onto the newer version's parent.
  */
 export interface CompareResult {
@@ -67,78 +69,102 @@ export interface CompareResult {
   files: CompareFile[];
 }
 
-/** Carries the script's own stderr message when it exits non-zero. */
-export class VersionHistoryError extends Error {}
+/** Carries gt's own stderr message when it exits non-zero. */
+export { GtError as VersionHistoryError };
 
-let workingCommand: string | undefined;
+/** gt's lines-changed split, as `gt loc` and `gt history` print it. */
+interface GtLines {
+  add: number;
+  del: number;
+}
+type GtSplit = Record<'src' | 'test' | 'doc' | 'gen', GtLines>;
 
-/**
- * Runs the gt-version-history script.
- *
- * Nothing provides that script yet. It has to construct the version history of
- * a branch's patch — every amend and restack of its single commit, and the
- * interdiffs between them — and report it in the shapes above; until a tool
- * does, every call here ends in the not-found error.
- *
- * The configured command is tried first; when it's the default bare name,
- * `scripts/gt-version-history` under the workspace repo is tried too, since
- * the VS Code server process often lacks the shell profile that puts the
- * script on PATH. Whichever command runs is remembered for subsequent calls.
- */
-async function runVersionHistory(
-  repoPath: string,
-  cwd: string,
-  args: string[],
-): Promise<string> {
-  const configured = vscode.workspace
-    .getConfiguration('worktreeReview')
-    .get<string>('versionHistoryCommand', DEFAULT_COMMAND);
-  const candidates: string[] = [];
-  if (workingCommand) candidates.push(workingCommand);
-  candidates.push(configured);
-  if (configured === DEFAULT_COMMAND) {
-    candidates.push(path.join(repoPath, 'scripts', DEFAULT_COMMAND));
-  }
-  for (const command of new Set(candidates)) {
-    try {
-      const stdout = await execTimed(
-        command,
-        args,
-        cwd,
-        `${path.basename(command)} ${args.join(' ')}`,
-      );
-      workingCommand = command;
-      return stdout;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        if (workingCommand === command) workingCommand = undefined;
-        continue;
-      }
-      throw new VersionHistoryError(scriptError(err));
-    }
-  }
-  throw new VersionHistoryError(
-    `'${configured}' not found — set worktreeReview.versionHistoryCommand to the script's path`,
-  );
+interface GtFile {
+  path: string;
+  kind: keyof GtSplit;
+  lines: GtSplit;
 }
 
-/** The script reports failures as `Error: …` on stderr before exiting 1. */
-function scriptError(err: unknown): string {
-  const stderr = (err as { stderr?: string }).stderr?.trim() ?? '';
-  if (stderr) return stderr.replace(/^Error:\s*/, '');
-  return err instanceof Error ? err.message.split('\n')[0] : String(err);
+/** One version as `gt history --json` prints it. */
+interface GtVersion {
+  version: number;
+  sha: string;
+  subject: string;
+  date: string;
+  action: string;
+  current: boolean;
+  remote: { pushed: boolean; fetched: boolean; tip: boolean };
+  /** Every move onto this patch, oldest first. */
+  moves: { sha: string }[];
+  delta?: { conflict: boolean; files: GtFile[] } | null;
+}
+
+interface GtListing {
+  branch: string;
+  parent: string;
+  versions: GtVersion[];
+}
+
+function sumLines(split: GtSplit): GtLines {
+  const total = { add: 0, del: 0 };
+  for (const lines of Object.values(split)) {
+    total.add += lines.add;
+    total.del += lines.del;
+  }
+  return total;
+}
+
+/**
+ * Reshapes `gt history --json` into the listing the views read. Files gt
+ * classes as generated (linguist-generated, lockfiles, vendored code) stay out
+ * of the totals and the file list, the way the views have always shown them.
+ */
+export function fromGt(listing: GtListing): VersionListing {
+  return {
+    branch: listing.branch,
+    parent: listing.parent,
+    versions: listing.versions.map((v) => {
+      const out: BranchVersion = {
+        version: v.version,
+        sha: v.sha,
+        date: v.date,
+        action: v.action,
+        subject: v.subject,
+        shas: v.moves.map((m) => m.sha),
+        // On the remote at some point, as far as this clone has seen.
+        pushed: v.remote.pushed || v.remote.fetched || v.remote.tip,
+        current: v.current,
+      };
+      if (v.delta?.conflict) {
+        out.delta = { conflict: true };
+      } else if (v.delta) {
+        const files = v.delta.files
+          .filter((f) => f.kind !== 'gen')
+          .map((f) => {
+            const lines = sumLines(f.lines);
+            return { path: f.path, added: lines.add, removed: lines.del };
+          })
+          .sort((a, b) => b.added + b.removed - (a.added + a.removed));
+        const generated = v.delta.files.filter((f) => f.kind === 'gen').map((f) => f.path);
+        out.delta = {
+          added: files.reduce((n, f) => n + f.added, 0),
+          removed: files.reduce((n, f) => n + f.removed, 0),
+          generated_hidden: generated.length,
+          files,
+          generated_files: generated,
+        };
+      }
+      return out;
+    }),
+  };
 }
 
 export async function listVersions(
-  repoPath: string,
   worktreePath: string,
   branch: string,
 ): Promise<VersionListing> {
-  const stdout = await runVersionHistory(repoPath, worktreePath, [
-    branch,
-    '--json',
-  ]);
-  return JSON.parse(stdout) as VersionListing;
+  const stdout = await runGt(worktreePath, ['history', branch, '--json']);
+  return fromGt(JSON.parse(stdout) as GtListing);
 }
 
 /**
@@ -146,19 +172,23 @@ export async function listVersions(
  * changed that file. Versions arrive newest first, so the first one to name a
  * path is the answer for it.
  *
- * Two things keep a genuinely changed path out of this map. Linguist-generated
- * files are excluded from every interdiff (the script reports only how many it
- * hid), and a version whose interdiff conflicts reports no files at all.
- * Callers show those files as unattributed rather than crediting whichever
- * older version happens to mention them.
+ * Generated files count here even though the views leave them out of a
+ * version's file list. A version whose interdiff conflicts reports no files at
+ * all, so a path it changed is missing from this map; callers show it as
+ * unattributed rather than crediting whichever older version mentions it.
  */
 export function lastTouchedVersions(
   listing: VersionListing,
 ): Map<string, number> {
   const lastTouched = new Map<string, number>();
   for (const version of listing.versions) {
-    for (const file of version.delta?.files ?? []) {
-      if (!lastTouched.has(file.path)) lastTouched.set(file.path, version.version);
+    const delta = version.delta;
+    const paths = [
+      ...(delta?.files ?? []).map((f) => f.path),
+      ...(delta?.generated_files ?? []),
+    ];
+    for (const p of paths) {
+      if (!lastTouched.has(p)) lastTouched.set(p, version.version);
     }
   }
   return lastTouched;
@@ -201,16 +231,17 @@ export function versionForComment(
  * other side sits on).
  */
 export async function compareVersions(
-  repoPath: string,
   worktreePath: string,
   branch: string,
   a: string,
   b: string,
 ): Promise<CompareResult> {
-  const stdout = await runVersionHistory(repoPath, worktreePath, [
+  const stdout = await runGt(worktreePath, [
+    'history',
     'compare',
     a,
     b,
+    '--branch',
     branch,
     '--json',
   ]);

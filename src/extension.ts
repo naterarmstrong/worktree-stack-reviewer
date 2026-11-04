@@ -2,10 +2,13 @@ import * as vscode from 'vscode';
 import { ReviewCommentController } from './commentController';
 import { COMPARE_LINK_PATH, parseCompareLink } from './compareLink';
 import { stopCore } from './core';
+import { ExplainerStore } from './explainers';
 import { GIT_SCHEME, GitContentProvider } from './gitContentProvider';
+import { HTML_PREVIEW_LINK_PATH, HtmlPreviews, parseHtmlPreviewLink } from './htmlPreview';
 import { initLog, log } from './log';
 import { PR_BODY_SCHEME, PrBodyContentProvider } from './prBody';
 import { asPreviewSelectionContext } from './previewComment';
+import { registerUnreadMarks } from './unreadMark';
 import {
   PREVIEW_EDITOR_VIEW_TYPE,
   ReviewPreviewEditorProvider,
@@ -24,7 +27,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const repoPath =
     vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
-  const comments = new ReviewCommentController(repoPath, context.extensionUri);
+  const explainers = new ExplainerStore(repoPath);
+  context.subscriptions.push(explainers);
+  const comments = new ReviewCommentController(repoPath, context.extensionUri, explainers);
   context.subscriptions.push(comments);
   void comments.ready();
 
@@ -41,14 +46,41 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(previewEditor);
 
-  const worktreeProvider = new WorktreeProvider(comments, prBodies, previewEditor);
+  const htmlPreviews = new HtmlPreviews();
+  const worktreeProvider = new WorktreeProvider(
+    comments,
+    prBodies,
+    previewEditor,
+    explainers,
+    htmlPreviews,
+  );
   context.subscriptions.push(
+    htmlPreviews,
+    // A finished explainer opens beside the editor without taking focus;
+    // the row under the PR's description reopens it later.
+    explainers.onDidChange((pr) => {
+      worktreeProvider.refresh();
+      const state = explainers.get(pr);
+      if (state?.status === 'done' && state.path) void htmlPreviews.show(state.path, true);
+    }),
     vscode.window.registerUriHandler({
       handleUri: (uri) => {
+        const page = parseHtmlPreviewLink(uri);
+        if (page && 'rejected' in page) {
+          log().warn(`refused preview link ${uri.toString()}: ${page.rejected}`);
+          void vscode.window.showWarningMessage(
+            `Worktree Stack Reviewer: not opening that page: ${page.rejected}. Only .html files in a wt-review directory can be previewed.`,
+          );
+          return;
+        }
+        if (page) {
+          void htmlPreviews.show(page.path);
+          return;
+        }
         const link = parseCompareLink(uri);
         if (!link) {
           void vscode.window.showWarningMessage(
-            `Worktree Stack Reviewer: unrecognised link ${uri.toString()}. Expected ${COMPARE_LINK_PATH}?branch=…&a=…&b=…`,
+            `Worktree Stack Reviewer: unrecognised link ${uri.toString()}. Expected ${COMPARE_LINK_PATH}?branch=…&a=…&b=… or ${HTML_PREVIEW_LINK_PATH}?path=…`,
           );
           return;
         }
@@ -60,6 +92,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(comments.onDidChange(() => worktreeProvider.refresh()));
 
   registerCommentCommands(context, comments, worktreeProvider, previewEditor);
+  context.subscriptions.push(registerUnreadMarks());
 
   const view = vscode.window.createTreeView('worktreeReview.changes', {
     treeDataProvider: worktreeProvider,
@@ -144,6 +177,9 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand('worktreeReview.openPrBody', (item) =>
       worktreeProvider.openPrBody(item),
+    ),
+    vscode.commands.registerCommand('worktreeReview.openExplainer', (item) =>
+      worktreeProvider.openExplainer(item),
     ),
     vscode.commands.registerCommand('worktreeReview.reviewPr', (item) =>
       worktreeProvider.reviewPr(item),
@@ -330,6 +366,9 @@ function registerCommentCommands(
     ),
     vscode.commands.registerCommand('worktreeReview.revealComment', (item) =>
       provider.revealComment(item),
+    ),
+    vscode.commands.registerCommand('worktreeReview.markCommentRead', (item) =>
+      provider.markCommentRead(item),
     ),
     vscode.commands.registerCommand('worktreeReview.copyComments', async (item) => {
       const worktreePath = await resolveWorktree(item);

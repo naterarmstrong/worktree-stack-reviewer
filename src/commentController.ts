@@ -9,13 +9,17 @@ import {
   type StoredThread,
   type ThreadKind,
   inboxPathFor,
+  isExplainerEntry,
   isNoteEntry,
+  markThreadRead,
   rejectedPathFor,
   sortThreads,
   storePathFor,
+  unreadCount,
 } from './commentStore';
 import { resolvePreviewRange } from './previewComment';
 import type { EditorSelection, ThreadView } from './previewProtocol';
+import type { ExplainerStore } from './explainers';
 import { ResolutionInbox } from './resolutionInbox';
 import {
   type Worktree,
@@ -168,6 +172,7 @@ export class ReviewCommentController implements vscode.Disposable {
   constructor(
     private readonly repoPath: string,
     extensionUri: vscode.Uri,
+    private readonly explainers: ExplainerStore,
   ) {
     this.agentIcon = vscode.Uri.joinPath(extensionUri, 'media', 'agent.svg');
     this.inbox = new ResolutionInbox((worktreePath, entries) =>
@@ -531,6 +536,8 @@ export class ReviewCommentController implements vscode.Disposable {
     const stored = this.store.find(worktreePath, threadId);
     if (!stored) return;
     this.pushComment(thread, stored, text);
+    // Replying means the reviewer has read what they are replying to.
+    if (markThreadRead(stored)) this.decorate(thread, stored);
     await this.commit(worktreePath);
   }
 
@@ -654,6 +661,7 @@ export class ReviewCommentController implements vscode.Disposable {
         author: c.author,
         body: c.body,
         createdAt: c.createdAt,
+        unread: c.unread,
       })),
     }));
   }
@@ -672,6 +680,7 @@ export class ReviewCommentController implements vscode.Disposable {
       body,
       createdAt: new Date().toISOString(),
     });
+    markThreadRead(found.thread);
     // Rebuild the live thread so the reply reaches the editor widget too; its
     // comment list is not re-read from the store otherwise.
     this.disposeThread(threadId);
@@ -688,6 +697,7 @@ export class ReviewCommentController implements vscode.Disposable {
     }
     if (found.thread.resolved === resolved) return;
     found.thread.resolved = resolved;
+    markThreadRead(found.thread);
     const live = this.live.get(threadId)?.thread;
     if (live) this.decorate(live, found.thread);
     await this.commit(found.storedIn);
@@ -773,8 +783,22 @@ export class ReviewCommentController implements vscode.Disposable {
     const located = this.locate(thread);
     if (!located) return;
     located.stored.resolved = !located.stored.resolved;
+    markThreadRead(located.stored);
     this.decorate(thread, located.stored);
     await this.commit(located.worktreePath);
+  }
+
+  /**
+   * Clears the thread's unread replies. Called when the reviewer opens it from
+   * the tree; replying and resolving clear them too, on their own paths.
+   */
+  async markRead(threadId: string): Promise<void> {
+    await this.ready();
+    const found = this.findAnywhere(threadId);
+    if (!found || !markThreadRead(found.thread)) return;
+    const live = this.live.get(threadId)?.thread;
+    if (live) this.decorate(live, found.thread);
+    await this.commit(found.storedIn);
   }
 
   /**
@@ -951,23 +975,37 @@ export class ReviewCommentController implements vscode.Disposable {
     const thread = this.controller.createCommentThread(
       uri,
       new vscode.Range(line, 0, endLine, 0),
-      stored.comments.map(
-        (c) =>
-          new ReviewComment(
-            c.id,
-            c.body,
-            vscode.CommentMode.Preview,
-            this.authorInfo(c.author),
-          ),
-      ),
+      [],
     );
     if (stored.startLine === undefined) thread.range = undefined;
-    for (const c of thread.comments) {
-      if (c instanceof ReviewComment) c.parent = thread;
-    }
+    this.refreshComments(thread, stored);
     thread.collapsibleState = vscode.CommentThreadCollapsibleState.Collapsed;
-    this.decorate(thread, stored);
     this.track(thread, stored.id, uri);
+  }
+
+  /**
+   * Brings a live thread's comments and decoration in line with its stored
+   * record. Comments it already shows are kept as they are, so one the
+   * reviewer is mid-way through editing survives a reply arriving.
+   */
+  private refreshComments(thread: vscode.CommentThread, stored: StoredThread): void {
+    const existing = new Map<string, vscode.Comment>();
+    for (const c of thread.comments) {
+      if (c instanceof ReviewComment) existing.set(c.id, c);
+    }
+    thread.comments = stored.comments.map((c) => {
+      const kept = existing.get(c.id);
+      if (kept) return kept;
+      const comment = new ReviewComment(
+        c.id,
+        c.body,
+        vscode.CommentMode.Preview,
+        this.authorInfo(c.author),
+      );
+      comment.parent = thread;
+      return comment;
+    });
+    this.decorate(thread, stored);
   }
 
   /**
@@ -1015,6 +1053,8 @@ export class ReviewCommentController implements vscode.Disposable {
     if (stored.side === 'base') parts.push('base');
     if (stored.startLine === undefined) parts.push('whole file');
     if (stored.drifted) parts.push('anchor drifted');
+    const unread = unreadCount(stored);
+    if (unread > 0) parts.push(`${unread} new`);
     thread.label = parts.length > 0 ? `${heading} (${parts.join(', ')})` : heading;
   }
 
@@ -1173,6 +1213,12 @@ export class ReviewCommentController implements vscode.Disposable {
     let noteCount = 0;
 
     for (const entry of entries) {
+      if (isExplainerEntry(entry)) {
+        // Not a comment: it only moves the PR's explainer row along.
+        const problem = await this.explainers.apply(entry);
+        if (problem) rejected.push({ ...entry, reason: problem });
+        continue;
+      }
       if (isNoteEntry(entry)) {
         const outcome = await this.openNote(worktreePath, entry);
         if (typeof outcome === 'string') {
@@ -1205,6 +1251,7 @@ export class ReviewCommentController implements vscode.Disposable {
             author,
             body: entry.reply,
             createdAt: new Date().toISOString(),
+            unread: true,
           });
           replyCount += 1;
         }
@@ -1235,10 +1282,16 @@ export class ReviewCommentController implements vscode.Disposable {
       return;
     }
 
-    // Rebuild the affected threads so replies and resolved state reach the UI;
-    // a live thread's comment list is not re-read from the store otherwise.
-    // New notes have no live thread yet; `reconcile` materialises them.
-    for (const id of rebuilt) this.disposeThread(id);
+    // Refresh the affected threads in place so replies and resolved state
+    // reach the UI; a live thread's comment list is not re-read from the store
+    // otherwise. Disposing and re-materialising would collapse a widget the
+    // reviewer has open. New notes have no live thread yet; `reconcile`
+    // materialises them.
+    for (const id of rebuilt) {
+      const live = this.live.get(id)?.thread;
+      const found = this.findAnywhere(id);
+      if (live && found) this.refreshComments(live, found.thread);
+    }
     await this.commitAll(touched);
     this.reconcile();
 
@@ -1306,6 +1359,7 @@ export class ReviewCommentController implements vscode.Disposable {
           author: entry.author ?? DEFAULT_AGENT_AUTHOR,
           body: entry.body,
           createdAt: now,
+          unread: true,
         },
       ],
     };

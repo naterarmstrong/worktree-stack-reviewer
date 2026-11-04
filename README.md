@@ -131,10 +131,9 @@ repository. Under each one:
   branches shows it.
 
   Beside the LOC row, the branch lists its **patches** — the amend history of
-  the branch's single commit, read from the `gt-version-history` (`vh`) script
-  (see [Requirements](#requirements): nothing provides it yet) — with each
-  version's date, action (amend/restack/…), push marker, and delta
-  vs the previous version. A patch is marked for the comments left on it, with
+  the branch's single commit, read from `gt history` (see
+  [Requirements](#requirements)) — with each version's date, action
+  (amend/restack/…), push marker, and delta vs the previous version. A patch is marked for the comments left on it, with
   the same two characters its branch row uses: `¶` for inline PR review
   comments written against that commit, `✎` for review comments written here
   while it was the tip. The tooltip says how many of each.
@@ -164,12 +163,29 @@ repository. Under each one:
 
   `a` and `b` are version numbers, shas, or `base`; shas are the stable
   choice, since version numbers shift when the reflog is truncated, and
-  `gt-version-history <branch> --json` lists them. `file` narrows the compare
+  `gt history <branch> --json` lists them. `file` narrows the compare
   to one worktree-relative path; a file the two versions agree on falls back
   to the whole compare. The branch need not be checked out anywhere. Links are
   clickable in the integrated terminal and in markdown previews; from outside
   VS Code the operating system hands them to whichever window claims the
   scheme. In Insiders the scheme is `vscode-insiders://`.
+
+  A local HTML page, such as the explainer the wt-review skill writes for a
+  PR, opens rendered in a tab beside the editor from a link of its own:
+
+  ```
+  vscode://naterarmstrong.worktree-stack-reviewer/preview?path=<percent-encoded absolute path>
+  ```
+
+  Any website can fire a `vscode://` link, so only an `.html` file directly
+  inside a directory named `wt-review` is rendered (checked again after
+  symlinks are resolved); anything else is refused with a warning. The tab
+  takes the page's `<title>`, opening the same link again reveals that tab, and
+  the page re-renders whenever the file is rewritten. Pages may use inline
+  styles and scripts, Google Fonts, scripts from cdnjs, jsDelivr and unpkg, and
+  `data:` images; nothing else loads, and the page can make no requests.
+  `data-theme` follows VS Code's light or dark theme, and links open in the
+  browser.
 
   Line counts do not wait on the work behind them: the row shows `…` until they
   arrive, so no git run sits on the critical path of the first paint. Expanding
@@ -494,7 +510,7 @@ The extension watches `resolutions.json` in each worktree's state directory
 and applies whatever an agent writes there. "Copy Resolutions Inbox Path"
 gives an agent the path; with the default location, an agent in the worktree
 can also find it as `"$(git rev-parse --git-dir)/wt-review/resolutions.json"`. The file holds a JSON array (or
-`{ "entries": [...] }`) of entries of two shapes:
+`{ "entries": [...] }`) of entries of three shapes:
 
 - **A resolution** names an existing thread by its `id` from the comments
   export and carries `resolved` and/or a `reply` noting what was done.
@@ -510,6 +526,28 @@ can also find it as `"$(git rev-parse --git-dir)/wt-review/resolutions.json"`. T
   { "file": "src/sync.ts", "startLine": 40, "endLine": 52,
     "body": "Retries now back off; the loop above is what changed." }
 ]
+```
+
+- **An explainer report** has `"kind": "explainer"`, a PR number in `pr`,
+  and a `status`. `started` puts an **Explainer** row with a spinner right
+  below that PR's Description row, both under its stack branch and under the
+  worktree that has it checked out. `done` carries the page's absolute `path`
+  (an `.html` file directly inside a `wt-review` directory, the same rule
+  `/preview` links follow) and optionally a `title` for the row;
+  the page then opens beside the editor without taking focus, and clicking the
+  row opens it again. `failed` carries an `error` and shows it on the row. A
+  `started` with no follow-up for 30 minutes is shown as stalled. Rewriting
+  the page in place re-renders an open tab, so a refreshed explainer needs no
+  second report. The state is kept per repository in `explainers.json` beside
+  `stacks.json`.
+
+```json
+[{ "kind": "explainer", "pr": 46584, "status": "started" }]
+```
+
+```json
+[{ "kind": "explainer", "pr": 46584, "status": "done",
+   "path": "/abs/path/wt-review/pr-46584.local.html", "title": "Stream loop yield" }]
 ```
 
 Notes are shown with the agent's avatar and a header reading **From Claude**
@@ -536,16 +574,10 @@ file that is not in the worktree or on lines past its end — are written to
   descriptions those rows carry, and the review comments that mark a patch or
   a branch.
 - [`gt`](https://github.com/naterarmstrong/gh-stack-cli) — optional; only
-  needed for the line counts on stack branches (`gt loc --json`). Resolved on
-  PATH, then as `~/.cargo/bin/gt`; override with `gtCommand`.
-- `gt-version-history` — optional; only needed for the version listings and
-  comparisons. **Nothing provides it yet.** These features need a tool that
-  constructs the version history of a branch's patch — each amend and restack
-  of its single commit, with the interdiffs between them — and answers
-  `<branch> --json` and the compare calls in the shape `src/versionHistory.ts`
-  reads. Until one exists, a branch's patch list reports the command as not
-  found. Resolved on PATH, then as `scripts/gt-version-history` under the
-  workspace repo; override with `versionHistoryCommand`.
+  needed for the line counts on stack branches (`gt loc --json`) and for the
+  patch listings and comparisons (`gt history --json`,
+  `gt history compare <a> <b> --branch <branch> --json`). Resolved on PATH,
+  then as `~/.cargo/bin/gt`; override with `gtCommand`.
 - Claude Code — optional; only needed to offer conversation titles as worktree
   names. Which conversations are running in a worktree comes from
   `sessions/*.json` under `CLAUDE_CONFIG_DIR`, falling back to `~/.claude`, and
@@ -639,9 +671,8 @@ assignment there is invisible to the extension.
 | `worktreeReview.showPullRequests` | `true` | Show the Stack section (PR data requires `gh`). |
 | `worktreeReview.hideAgentWorktreesOnTheirOwnBranch` | `true` | Leave out an agent session's worktree while it is still on the branch named after it. See [Which worktrees are listed](#which-worktrees-are-listed). |
 | `worktreeReview.reviewWorktreeName` | `review` | Directory name of the worktree branches can be checked out into for review, and the name of the branch it resets to. See [The review worktree](#the-review-worktree). |
-| `worktreeReview.versionHistoryCommand` | `gt-version-history` | Command for version listings/compares; bare names resolve on PATH, then `scripts/` in the workspace repo. |
 | `worktreeReview.stateDirectory` | empty | Where review state is kept: empty for each worktree's git directory, or a path relative to each worktree. See [Files written](#files-written). |
-| `worktreeReview.gtCommand` | `gt` | Command for stack branches' line counts; a bare name resolves on PATH, then `~/.cargo/bin/`. |
+| `worktreeReview.gtCommand` | `gt` | Command for stack branches' line counts and patch versions; a bare name resolves on PATH, then `~/.cargo/bin/`. |
 | `worktreeReview.pruneIntervalHours` | `6` | How often to archive comments from deleted branches; `0` disables the timer. |
 | `worktreeReview.previewColumnWidth` | `900` | How wide the review preview sets its text, in pixels; `0` runs the full width of the tab. |
 

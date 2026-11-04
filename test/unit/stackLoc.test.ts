@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { type GtLoc, summarizeGtLoc } from '../../src/stackLoc';
+import { type GtLoc, fileBuckets, summarizeGtLoc } from '../../src/stackLoc';
 
 const none = { add: 0, del: 0 };
 
@@ -74,5 +74,30 @@ describe('summarizeGtLoc', () => {
     const summary = summarizeGtLoc({ base: 'c', commit: 'c', files: [] });
     expect(summary.files).toBe(0);
     expect(Object.values(summary.buckets).every((b) => b.files === 0)).toBe(true);
+  });
+});
+
+describe('fileBuckets', () => {
+  const split = file('core/src/lib.rs', 'src', {
+    src: { add: 4, del: 0 },
+    test: { add: 9, del: 1 },
+  }).lines;
+
+  test('splits a file whose counts match gt’s', () => {
+    expect(fileBuckets(13, 1, split)).toEqual([
+      ['src', { files: 1, added: 4, removed: 0 }],
+      ['test', { files: 1, added: 9, removed: 1 }],
+    ]);
+  });
+
+  test('keeps the total when the row counts a different change than gt', () => {
+    // An uncommitted edit, or a base other than gt's.
+    expect(fileBuckets(15, 1, split)).toBeUndefined();
+  });
+
+  test('keeps the total for a file gt did not count, or a binary one', () => {
+    expect(fileBuckets(3, 1, undefined)).toBeUndefined();
+    expect(fileBuckets(undefined, undefined, file('a.png', 'src', {}, true).lines))
+      .toBeUndefined();
   });
 });

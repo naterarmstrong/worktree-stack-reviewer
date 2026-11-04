@@ -4,7 +4,9 @@ import {
   CommentStore,
   type StoredThread,
   archivePathFor,
+  markThreadRead,
   storePathFor,
+  unreadCount,
 } from '../../src/commentStore';
 import { ViewedStore } from '../../src/viewedStore';
 import { type Fixture, makeFixture } from '../fixtures/repo';
@@ -103,6 +105,21 @@ describe('CommentStore', () => {
     const store = new CommentStore();
     await store.load(fixture.review);
     expect(store.threads(fixture.review)).toEqual([]);
+  });
+});
+
+describe('unread comments', () => {
+  test('counts and clears only flagged comments', () => {
+    const t = thread('a');
+    t.comments.push(
+      { id: 'a-2', author: 'Claude', body: 'done', createdAt: '2026-01-02T00:00:00.000Z', unread: true },
+      { id: 'a-3', author: 'Claude', body: 'also', createdAt: '2026-01-03T00:00:00.000Z', unread: true },
+    );
+    expect(unreadCount(t)).toBe(2);
+    expect(markThreadRead(t)).toBe(true);
+    expect(unreadCount(t)).toBe(0);
+    expect(t.comments.some((c) => 'unread' in c)).toBe(false);
+    expect(markThreadRead(t)).toBe(false);
   });
 });
 

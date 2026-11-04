@@ -1,5 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import type { ExplainerEntry } from './explainers';
 import { describeError, log } from './log';
 import { stateDirFor } from './statePaths';
 
@@ -33,6 +34,12 @@ export interface StoredComment {
   author: string;
   body: string;
   createdAt: string;
+  /**
+   * Set on a comment an agent wrote through the inbox until the reviewer has
+   * seen it — opened its thread, replied, or resolved it. Absent means read,
+   * which is also what every comment written before this existed is.
+   */
+  unread?: true;
 }
 
 /**
@@ -145,10 +152,14 @@ export interface NoteEntry {
   snippet?: string;
 }
 
-export type InboxEntry = ResolutionEntry | NoteEntry;
+export type InboxEntry = ResolutionEntry | NoteEntry | ExplainerEntry;
 
 export function isNoteEntry(entry: InboxEntry): entry is NoteEntry {
-  return !('id' in entry);
+  return !('id' in entry) && !isExplainerEntry(entry);
+}
+
+export function isExplainerEntry(entry: InboxEntry): entry is ExplainerEntry {
+  return 'kind' in entry && entry.kind === 'explainer';
 }
 
 export function archivePathFor(worktreePath: string): string {
@@ -263,6 +274,23 @@ export class CommentStore {
     this.seq += 1;
     return `${Date.now().toString(36)}${this.seq.toString(36)}`;
   }
+}
+
+/** Comments on the thread the reviewer has not seen yet. */
+export function unreadCount(thread: StoredThread): number {
+  return thread.comments.filter((c) => c.unread).length;
+}
+
+/** Clears every unread flag on the thread; reports whether any was set. */
+export function markThreadRead(thread: StoredThread): boolean {
+  let changed = false;
+  for (const c of thread.comments) {
+    if (c.unread) {
+      delete c.unread;
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 export function sortThreads(threads: StoredThread[]): StoredThread[] {

@@ -40,8 +40,11 @@ export async function listOpenPrs(repoPath: string): Promise<OpenPr[]> {
     repoPath,
     'gh pr list',
   );
-  const raw = JSON.parse(stdout) as GhPrJson[];
-  return raw.map((p) => ({
+  return (JSON.parse(stdout) as GhPrJson[]).map(toOpenPr);
+}
+
+function toOpenPr(p: GhPrJson): OpenPr {
+  return {
     number: p.number,
     title: p.title,
     isDraft: p.isDraft,
@@ -50,7 +53,67 @@ export async function listOpenPrs(repoPath: string): Promise<OpenPr[]> {
     baseRefName: p.baseRefName,
     author: p.author?.login ?? '',
     body: p.body ?? '',
-  }));
+  };
+}
+
+/** Branches per GraphQL request; each is one aliased lookup in the query. */
+const BRANCH_LOOKUP_CHUNK = 100;
+
+interface GhPrNode extends GhPrJson {
+  headRepositoryOwner?: { login?: string } | null;
+}
+
+/**
+ * The open PR for each of `branches`, looked up by head branch name. A backup
+ * for `listOpenPrs`: its newest-200 window misses older PRs in a busy
+ * repository, and paging through every open PR costs seconds per refresh.
+ * Each branch is an aliased `pullRequests(headRefName:)` field, so one request
+ * covers a whole chunk. Branch names travel as variables, never spliced into
+ * the query text. A branch with no open PR is simply absent from the result.
+ */
+export async function listOpenPrsForBranches(
+  repoPath: string,
+  branches: string[],
+): Promise<OpenPr[]> {
+  const found: OpenPr[] = [];
+  for (let i = 0; i < branches.length; i += BRANCH_LOOKUP_CHUNK) {
+    found.push(...(await lookUpChunk(repoPath, branches.slice(i, i + BRANCH_LOOKUP_CHUNK))));
+  }
+  return found;
+}
+
+async function lookUpChunk(repoPath: string, branches: string[]): Promise<OpenPr[]> {
+  const vars = branches.map((_, i) => `, $h${i}: String!`).join('');
+  // `first: 5` rather than 1: a fork can open a PR from a branch of the same
+  // name, and the one wanted is the PR whose head lives in this repository.
+  const fields = branches
+    .map((_, i) => `b${i}: pullRequests(headRefName: $h${i}, states: OPEN, first: 5) { ...pr }`)
+    .join('\n    ');
+  const query = `query($owner: String!, $name: String!${vars}) {
+  repository(owner: $owner, name: $name) {
+    owner { login }
+    ${fields}
+  }
+}
+fragment pr on PullRequestConnection {
+  nodes { number title isDraft url headRefName baseRefName body author { login } headRepositoryOwner { login } }
+}`;
+  // `-F` so gh fills in the placeholders; branches go through `-f` so a name
+  // like `123` or `true` stays a string.
+  const args = ['api', 'graphql', '-F', 'owner={owner}', '-F', 'name={repo}', '-f', `query=${query}`];
+  branches.forEach((b, i) => args.push('-f', `h${i}=${b}`));
+  const stdout = await execTimed('gh', args, repoPath, `gh pr lookup (${branches.length} branches)`);
+  const repo = (JSON.parse(stdout) as {
+    data: { repository: Record<string, unknown> & { owner: { login: string } } };
+  }).data.repository;
+  const owner = repo.owner.login;
+  const found: OpenPr[] = [];
+  branches.forEach((_, i) => {
+    const nodes = (repo[`b${i}`] as { nodes: GhPrNode[] } | undefined)?.nodes ?? [];
+    const pr = nodes.find((n) => n.headRepositoryOwner?.login === owner) ?? nodes[0];
+    if (pr) found.push(toOpenPr(pr));
+  });
+  return found;
 }
 
 /**

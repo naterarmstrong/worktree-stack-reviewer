@@ -283,6 +283,7 @@
       const row = el('div', 'wt-comment');
       const meta = el('div', 'wt-comment-meta');
       meta.appendChild(el('span', 'wt-author', comment.author));
+      if (comment.unread) meta.appendChild(el('span', 'wt-badge wt-badge-new', 'new'));
       meta.appendChild(
         el('span', 'wt-time', new Date(comment.createdAt).toLocaleString()),
       );
