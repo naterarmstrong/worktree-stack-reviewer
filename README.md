@@ -434,6 +434,10 @@ Side", or *Open With…* — where review comments live inside the rendered page
   unresolved threads as cards with their comments, a reply box, and a resolve
   button; resolved ones as a one-line chip that expands on click. The line
   label on a card opens the source editor at that line.
+- A link to another `.md` file opens that file's review preview in a new tab,
+  at the heading its `#fragment` names, so a reader following links through
+  the docs can comment wherever they land. Opening a file already open reveals
+  its tab, and the page linked from keeps its unsent draft.
 - The page tracks edits to the source document live, and thread changes made
   anywhere — the text editor, the tree, an agent resolution — appear as they
   happen.

@@ -2,6 +2,8 @@ import { describe, expect, test } from 'vitest';
 import {
   asEditorSelection,
   asWebviewToEditorMessage,
+  isMarkdownPath,
+  parseRelativeLink,
 } from '../../src/previewProtocol';
 
 describe('asEditorSelection', () => {
@@ -99,5 +101,29 @@ describe('submitReview', () => {
       verdict: 'approve',
       body: '',
     });
+  });
+});
+
+describe('parseRelativeLink', () => {
+  test.each([
+    ['./a.md', { path: './a.md', fragment: '' }],
+    ['./a.md#setup', { path: './a.md', fragment: 'setup' }],
+    ['./a.md?plain=1#setup', { path: './a.md', fragment: 'setup' }],
+    ['../my%20docs/a.md', { path: '../my docs/a.md', fragment: '' }],
+    ['./a.md#caf%C3%A9', { path: './a.md', fragment: 'caf%C3%A9' }],
+    ['./100%.md', { path: './100%.md', fragment: '' }],
+  ])('splits %s', (href, expected) => {
+    expect(parseRelativeLink(href)).toEqual(expected);
+  });
+});
+
+describe('isMarkdownPath', () => {
+  test.each([
+    ['/repo/docs/a.md', true],
+    ['/repo/README.MD', true],
+    ['/repo/a.md.txt', false],
+    ['/repo/a.png', false],
+  ])('%s', (file, expected) => {
+    expect(isMarkdownPath(file)).toBe(expected);
   });
 });

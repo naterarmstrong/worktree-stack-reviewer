@@ -9,6 +9,8 @@ import {
   type EditorSelection,
   type ReviewVerdict,
   asWebviewToEditorMessage,
+  isMarkdownPath,
+  parseRelativeLink,
 } from './previewProtocol';
 
 export const PREVIEW_EDITOR_VIEW_TYPE = 'worktreeReview.markdownPreview';
@@ -47,6 +49,8 @@ export class ReviewPreviewEditorProvider
   private readonly pendingComposer = new Map<string, EditorSelection>();
   /** Thread to bring into view once a freshly opened panel is ready. */
   private readonly pendingReveal = new Map<string, string>();
+  /** Heading to bring into view once a freshly opened panel is ready. */
+  private readonly pendingFragment = new Map<string, string>();
   /** Review dialogs to open once a freshly opened panel is ready. */
   private readonly pendingReview = new Map<string, ReviewDialog>();
   private readonly disposables: vscode.Disposable[] = [];
@@ -148,6 +152,32 @@ export class ReviewPreviewEditorProvider
   }
 
   /**
+   * Opens (or reveals) the review preview for a document, at a heading when
+   * the link named one — where a link to another markdown file lands, so a
+   * reader following it stays somewhere they can comment. The tab is a permanent
+   * one, so opening the next link cannot replace it and lose an unsent draft.
+   */
+  async openAtFragment(resource: vscode.Uri, fragment: string): Promise<void> {
+    const key = resource.toString();
+    const existing = this.panels.get(key);
+    if (existing) {
+      existing.reveal(undefined, false);
+      if (fragment) {
+        void existing.webview.postMessage({ type: 'revealFragment', fragment });
+      }
+      return;
+    }
+    // Delivered on the webview's `ready`, which a fresh panel has yet to send.
+    if (fragment) this.pendingFragment.set(key, fragment);
+    await vscode.commands.executeCommand(
+      'vscode.openWith',
+      resource,
+      PREVIEW_EDITOR_VIEW_TYPE,
+      { preview: false },
+    );
+  }
+
+  /**
    * Opens (or reveals) a PR description's preview with the review dialog
    * showing over it — where the tree's and the title bar's review action land.
    * The description and its conversation stay readable behind the dialog.
@@ -237,6 +267,11 @@ export class ReviewPreviewEditorProvider
           this.pendingReveal.delete(key);
           void panel.webview.postMessage({ type: 'revealThread', threadId: reveal });
         }
+        const fragment = this.pendingFragment.get(key);
+        if (fragment) {
+          this.pendingFragment.delete(key);
+          void panel.webview.postMessage({ type: 'revealFragment', fragment });
+        }
         const review = this.pendingReview.get(key);
         if (review) {
           this.pendingReview.delete(key);
@@ -316,25 +351,28 @@ export class ReviewPreviewEditorProvider
     document: vscode.TextDocument,
     href: string,
   ): Promise<void> {
-    let uri: vscode.Uri | undefined;
-    if (/^[a-z][a-z0-9+.-]*:/i.test(href)) {
-      try {
-        uri = vscode.Uri.parse(href, true);
-      } catch {
-        uri = undefined;
-      }
-    } else {
-      const dir = documentRoot(document.uri);
-      uri = dir ? vscode.Uri.file(path.resolve(dir, href)) : undefined;
-    }
-    if (!uri) return;
+    const target = resolveLink(documentRoot(document.uri), href);
+    if (!target) return;
+    const { uri, fragment } = target;
     if (uri.scheme === 'http' || uri.scheme === 'https' || uri.scheme === 'mailto') {
       await vscode.env.openExternal(uri);
       return;
     }
-    if (uri.scheme === 'file') {
-      await vscode.commands.executeCommand('vscode.open', uri);
+    if (uri.scheme !== 'file') return;
+    const file = uri.with({ query: '', fragment: '' });
+    if (!isMarkdownPath(file.path)) {
+      await vscode.commands.executeCommand('vscode.open', file);
+      return;
     }
+    try {
+      await vscode.workspace.fs.stat(file);
+    } catch {
+      void vscode.window.showWarningMessage(
+        `Worktree Stack Reviewer: no such file: ${file.fsPath}`,
+      );
+      return;
+    }
+    await this.openAtFragment(file, fragment);
   }
 
   private async pushRender(
@@ -479,6 +517,31 @@ function documentRoot(uri: vscode.Uri): string | undefined {
   }
   const pr = parsePrBodyUri(uri);
   return pr?.worktreePath;
+}
+
+/**
+ * Where a link in a rendered document points. A relative link resolves against
+ * `root`, so without one it points nowhere. An external link keeps its URI
+ * whole; `fragment` is only read for a document the link opens here.
+ */
+export function resolveLink(
+  root: string | undefined,
+  href: string,
+): { uri: vscode.Uri; fragment: string } | undefined {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) {
+    try {
+      const uri = vscode.Uri.parse(href, true);
+      return { uri, fragment: uri.fragment };
+    } catch {
+      return undefined;
+    }
+  }
+  if (!root) return undefined;
+  const link = parseRelativeLink(href);
+  return {
+    uri: vscode.Uri.file(path.resolve(root, link.path)),
+    fragment: link.fragment,
+  };
 }
 
 /**

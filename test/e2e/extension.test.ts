@@ -1,5 +1,6 @@
 import * as assert from 'node:assert';
 import * as cp from 'node:child_process';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 
@@ -108,6 +109,42 @@ suite('Worktree Stack Reviewer', () => {
       (tab.input as vscode.TabInputCustom).uri.toString(),
       uri.toString(),
     );
+  });
+
+  /**
+   * Following a link to another markdown file rests on two things only VS Code
+   * can answer: that `openWith` takes the options that keep the tab from being
+   * replaced by the next link, and that the engine stamps a heading with the
+   * lowercased id a `#fragment` is looked up by.
+   */
+  test('a linked document opens in a permanent review preview tab', async () => {
+    const uri = vscode.Uri.file(path.join(featureWorktree, 'docs', 'linked.md'));
+    fs.writeFileSync(uri.fsPath, '# Linked\n');
+
+    await vscode.commands.executeCommand('vscode.openWith', uri, PREVIEW_VIEW_TYPE, {
+      preview: false,
+    });
+    await settle(1_000);
+
+    const tab = vscode.window.tabGroups.all
+      .flatMap((group) => group.tabs)
+      .find(
+        (t) =>
+          t.input instanceof vscode.TabInputCustom &&
+          t.input.uri.toString() === uri.toString(),
+      );
+    assert.ok(tab, 'the linked document did not open in the review preview');
+    assert.strictEqual(tab.isPreview, false);
+    fs.rmSync(uri.fsPath);
+  });
+
+  test('renders a heading with the id a fragment resolves to', async () => {
+    const html = await vscode.commands.executeCommand<string>(
+      'markdown.api.render',
+      '# Setup Guide\n',
+    );
+
+    assert.match(html, /id="setup-guide"/);
   });
 
   /**

@@ -68,6 +68,9 @@
       case 'revealThread':
         revealThread(msg.threadId);
         break;
+      case 'revealFragment':
+        scrollToFragment(msg.fragment);
+        break;
       case 'openReview':
         openReview({ number: msg.number, title: msg.title });
         break;
@@ -656,12 +659,27 @@
       event.preventDefault();
       event.stopPropagation();
       if (href.startsWith('#')) {
-        const target = document.getElementById(href.slice(1));
-        if (target) target.scrollIntoView();
+        scrollToFragment(href.slice(1));
         return;
       }
       vscode.postMessage({ type: 'openLink', href });
     },
     true,
   );
+
+  // Heading ids are the engine's lowercased slugs, while a link may carry its
+  // fragment percent-encoded or in the heading's own case.
+  function scrollToFragment(fragment) {
+    let decoded = fragment;
+    try {
+      decoded = decodeURIComponent(fragment);
+    } catch {
+      // A literal `%`, not an escape.
+    }
+    const target =
+      document.getElementById(fragment) ??
+      document.getElementById(decoded) ??
+      document.getElementById(decoded.toLowerCase());
+    if (target) target.scrollIntoView();
+  }
 })();

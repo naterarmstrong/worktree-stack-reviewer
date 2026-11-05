@@ -54,6 +54,37 @@ export type WebviewToEditorMessage =
   | { type: 'openLink'; href: string }
   | { type: 'submitReview'; verdict: ReviewVerdict; body: string };
 
+/** The parts of a relative link in a rendered document that name a target. */
+export interface RelativeLink {
+  /** Percent-decoded, with any query and fragment taken off. */
+  path: string;
+  /** Without the `#`, as written; empty when the link has none. */
+  fragment: string;
+}
+
+export function parseRelativeLink(href: string): RelativeLink {
+  const hash = href.indexOf('#');
+  const fragment = hash < 0 ? '' : href.slice(hash + 1);
+  const target = hash < 0 ? href : href.slice(0, hash);
+  const query = target.indexOf('?');
+  const raw = query < 0 ? target : target.slice(0, query);
+  return { path: percentDecoded(raw), fragment };
+}
+
+/** Whether a path is one the review preview opens; see `customEditors`. */
+export function isMarkdownPath(file: string): boolean {
+  return /\.md$/i.test(file);
+}
+
+function percentDecoded(text: string): string {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    // A literal `%` in a hand-written link, not an escape.
+    return text;
+  }
+}
+
 export function asWebviewToEditorMessage(
   arg: unknown,
 ): WebviewToEditorMessage | undefined {
