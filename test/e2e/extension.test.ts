@@ -153,6 +153,51 @@ suite('Worktree Stack Reviewer', () => {
    * with the built-in preview's own registered 14px whether or not anyone
    * asked for it — which is why the provider reads them with `inspect`.
    */
+  test('an open left side follows a hidden change in and back out', async () => {
+    const git = (args: string[], env: NodeJS.ProcessEnv = {}, input?: string): string =>
+      cp
+        .execFileSync('git', args, {
+          cwd: featureWorktree,
+          encoding: 'utf8',
+          input,
+          env: { ...process.env, ...env },
+        })
+        .trim();
+    // The fixture has no origin, so the default base names nothing to diff from.
+    const settings = vscode.workspace.getConfiguration('worktreeReview');
+    await settings.update('fallbackBase', 'main', vscode.ConfigurationTarget.Workspace);
+    await settle(3_000);
+
+    const base = git(['merge-base', 'HEAD', 'main']);
+    const index = { GIT_INDEX_FILE: path.join(fixtureRoot, 'hidden-index') };
+    git(['read-tree', base], index);
+    const blob = git(['hash-object', '-w', '--stdin'], {}, '// hidden\n');
+    git(['update-index', '--add', '--cacheinfo', `100644,${blob},src/app.ts`], index);
+    const commit = git(['commit-tree', git(['write-tree'], index), '-p', base, '-m', 'Hide it']);
+
+    const inbox = path.resolve(
+      featureWorktree,
+      git(['rev-parse', '--git-path', 'wt-review/resolutions.json']),
+    );
+    const post = async (entry: object): Promise<void> => {
+      fs.writeFileSync(inbox, JSON.stringify([entry]));
+      await settle(3_000);
+    };
+    await post({ kind: 'hiddenChange', commit, branch: 'feature' });
+
+    const left = vscode.Uri.from({
+      scheme: 'wt-ext-git',
+      path: '/src/app.ts',
+      query: new URLSearchParams({ wt: featureWorktree, ref: 'refs/wt-review/view/feature' }).toString(),
+    });
+    const doc = await vscode.workspace.openTextDocument(left);
+    assert.strictEqual(doc.getText(), '// hidden\n');
+
+    await post({ kind: 'hiddenChange', commit, branch: 'feature', action: 'remove' });
+    assert.ok(doc.getText().includes('export const name'), `left side still reads ${doc.getText()}`);
+    await settings.update('fallbackBase', undefined, vscode.ConfigurationTarget.Workspace);
+  });
+
   test('reports no chosen value for a built-in preview setting', () => {
     const config = vscode.workspace.getConfiguration('markdown.preview');
 

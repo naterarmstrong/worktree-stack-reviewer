@@ -57,7 +57,7 @@ describe('changed files after the base moves', () => {
     const Provider = WorktreeProvider as unknown as new (...args: unknown[]) => typeof provider;
     // Collaborators the file list doesn't read: every method is a no-op.
     const inert = new Proxy({}, { get: () => async () => undefined });
-    provider = new Provider(inert, inert, inert, inert, inert);
+    provider = new Provider(inert, inert, inert, inert, inert, inert);
   });
 
   afterAll(() => {

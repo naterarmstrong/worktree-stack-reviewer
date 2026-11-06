@@ -420,6 +420,43 @@ worktree at all still shows its comments under its stack row. Each one also
 records the branch tip it was written against, which is what marks the
 [patch](#what-it-does) it was left on.
 
+### Hidden changes
+
+An agent can hide a class of mechanical change, such as the knock-on edits of a
+rename, so the diff shows only what's left. Each class is one commit the agent
+builds on the base. It never touches the branch and is never pushed: it lives
+behind `refs/wt-review/`, which a plain `git push` doesn't send.
+
+A worktree with hidden changes gets a **Hidden Changes** section just below
+Comments, with a row per commit:
+
+- **The checkbox** turns the commit on or off. The changed-file list, its line
+  counts and any open diff follow at once. Unticked commits stay in the section.
+- **Expanding a row** lists the files that commit touches, and clicking one
+  opens exactly what it hides there, so nothing is hidden on the agent's word.
+- **The trash icon** removes the commit for good.
+
+Underneath, VS Code's diff takes two documents and can't suppress a hunk, so
+hiding moves the left side. The diff is taken against the merge base plus the
+ticked commits, replayed in order with a three-way merge into a tree the ref
+`refs/wt-review/view/<branch>` points at. Because the commits are replayed
+rather than used as they stand, one can be turned off under another, and a
+restack carries the whole set to the new base.
+
+A hidden change can fail only by showing too much:
+
+- A commit that no longer applies is skipped and marked **not applied** with a
+  warning icon, and its changes stay in the diff.
+- If a commit changes something the branch doesn't, that shows up in the diff
+  as a change going backwards.
+
+While something is hidden, a file's viewed tick is tied to the shortened diff,
+so turning the commit off shows it unviewed again. Line counts on the rows
+aren't split by version, since gt counts the whole branch. A comment on a
+hidden file still counts as inside the diff in the tree and the export. A
+comment on the left side is written against the synthetic base, so its line
+numbers can shift when a commit is toggled. Replaying needs git 2.45 or newer.
+
 ### The review preview
 
 Markdown files have a second preview — **Markdown Review Preview**, opened
@@ -514,7 +551,7 @@ The extension watches `resolutions.json` in each worktree's state directory
 and applies whatever an agent writes there. "Copy Resolutions Inbox Path"
 gives an agent the path; with the default location, an agent in the worktree
 can also find it as `"$(git rev-parse --git-dir)/wt-review/resolutions.json"`. The file holds a JSON array (or
-`{ "entries": [...] }`) of entries of three shapes:
+`{ "entries": [...] }`) of entries of four shapes:
 
 - **A resolution** names an existing thread by its `id` from the comments
   export and carries `resolved` and/or a `reply` noting what was done.
@@ -552,6 +589,16 @@ can also find it as `"$(git rev-parse --git-dir)/wt-review/resolutions.json"`. T
 ```json
 [{ "kind": "explainer", "pr": 46584, "status": "done",
    "path": "/abs/path/wt-review/pr-46584.local.html", "title": "Stream loop yield" }]
+```
+
+- **A hidden change** has `"kind": "hiddenChange"` and names a `commit`, whose
+  diff against its first parent is what gets [hidden](#hidden-changes).
+  `branch` defaults to the worktree's, and `"action": "remove"` takes one away
+  again. The list is kept per branch in `hidden-changes.json` beside
+  `stacks.json`.
+
+```json
+[{ "kind": "hiddenChange", "commit": "9fceb02", "branch": "my-branch" }]
 ```
 
 Notes are shown with the agent's avatar and a header reading **From Claude**
@@ -752,9 +799,9 @@ inside the worktree's own git directory — `.git/wt-review/` for the main
 checkout, `.git/worktrees/<name>/wt-review/` for a linked one — where git never
 sees it, so nothing has to be ignored and nothing can be committed by
 accident. The `stateDirectory` setting moves it to a path relative to each
-worktree instead (which then needs ignoring). `stacks.json` and
-`worktree-names.json` describe the repository rather than one worktree, so
-they are written only in the main worktree's.
+worktree instead (which then needs ignoring). `stacks.json`,
+`worktree-names.json` and `hidden-changes.json` describe the repository rather
+than one worktree, so they are written only in the main worktree's.
 
 | File | Purpose |
 | --- | --- |
@@ -762,6 +809,7 @@ they are written only in the main worktree's.
 | `stacks.json` | Stack names and their pinned branch membership (main worktree only). |
 | `worktree-names.json` | The name given to each worktree (main worktree only). |
 | `viewed.json` | Which files have been marked viewed, and at which patch ids. |
+| `hidden-changes.json` | Each branch's hidden commits and whether they are on (main worktree only). |
 | `comments.archive.json` | Threads whose branch no longer exists locally. |
 | `resolutions.json` | Inbox the extension watches for agent-written resolutions and notes; consumed and deleted on pickup. |
 | `resolutions.rejected.json` | Inbox entries the extension could not apply, each with a reason. |

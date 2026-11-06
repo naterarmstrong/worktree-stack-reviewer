@@ -122,16 +122,18 @@ interface CoreChangedFile extends ChangedFile {
  * What a worktree changes relative to where it left `base`. Without
  * uncommitted changes this is the `base...HEAD` range a PR shows; with them,
  * the right side is the files on disk, staged and unstaged edits included,
- * plus every untracked file as an addition.
+ * plus every untracked file as an addition. `exactBase` takes `base` as the left
+ * side as it stands, for a left side that isn't on the branch's history.
  */
 export async function listChangedFiles(
   worktreePath: string,
   base: string,
   includeUncommitted: boolean,
+  exactBase = false,
 ): Promise<ChangedFile[]> {
   const { files, patch } = await call<{ files: CoreChangedFile[]; patch: string }>(
     'changedFiles',
-    { worktree: worktreePath, base, includeUncommitted },
+    { worktree: worktreePath, base, includeUncommitted, exactBase },
   );
   // The core writes the `-U0` patch git would, and its sections are hashed
   // here so a viewed tick keeps one definition of a patch id.
@@ -341,6 +343,37 @@ export async function listUncommittedChanges(
   worktreePath: string,
 ): Promise<string[]> {
   return call<string[]>('uncommitted', { repo: worktreePath });
+}
+
+export async function commitSubject(repoPath: string, commit: string): Promise<string> {
+  return (await git(['log', '-1', '--format=%s', commit], repoPath)).trim();
+}
+
+/**
+ * Replays `commit`'s own change onto `onto` with a three-way merge and returns
+ * the resulting tree. `onto` may be a tree, so a run of these builds on itself
+ * without making a commit for each step. Rejects with exit code 1 on a conflict.
+ * `--merge-base` needs git 2.45 to take a tree.
+ */
+export async function applyCommitOnto(
+  repoPath: string,
+  onto: string,
+  commit: string,
+): Promise<string> {
+  const stdout = await git(
+    ['merge-tree', '--write-tree', '--no-messages', `--merge-base=${commit}^`, onto, commit],
+    repoPath,
+  );
+  return stdout.trim();
+}
+
+/** Points `ref` at `target`, which outside `refs/heads` may be a tree. */
+export async function pinRef(repoPath: string, ref: string, target: string): Promise<void> {
+  await git(['update-ref', ref, target], repoPath);
+}
+
+export async function deleteRef(repoPath: string, ref: string): Promise<void> {
+  await git(['update-ref', '-d', ref], repoPath);
 }
 
 /**

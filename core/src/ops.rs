@@ -132,6 +132,10 @@ struct ChangedArgs {
     worktree: PathBuf,
     base: String,
     include_uncommitted: bool,
+    /// Take `base` as the left side as it stands rather than where HEAD left it.
+    /// It need not be a commit: a hidden-changes view is a bare tree.
+    #[serde(default)]
+    exact_base: bool,
 }
 
 #[derive(Serialize)]
@@ -157,12 +161,17 @@ struct Changed {
 }
 
 /// What a worktree changes relative to where it left `base`: committed changes
-/// only (`base...HEAD`), or with staged, unstaged and untracked files too.
+/// only (`base...HEAD`), or with staged, unstaged and untracked files too. With
+/// `exact_base` the left side is `base` itself.
 fn changed_files(repos: &Repos, args: ChangedArgs) -> Result<Changed> {
     let repo = repos.get(&args.worktree)?.with_object_memory();
     let head = repo.head_id()?.detach();
-    let base = diff::peel_to_commit(&repo, &args.base)?;
-    let left = diff::commit_tree(&repo, diff::merge_base(&repo, head, base)?)?;
+    let left = if args.exact_base {
+        diff::peel_to_tree(&repo, &args.base)?
+    } else {
+        let base = diff::peel_to_commit(&repo, &args.base)?;
+        diff::commit_tree(&repo, diff::merge_base(&repo, head, base)?)?
+    };
     let (right, state) = if args.include_uncommitted {
         let state = diff::worktree_state(&repo)?;
         (state.tree, Some(state))

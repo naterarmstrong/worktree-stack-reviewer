@@ -10,6 +10,7 @@ import {
   type ThreadKind,
   inboxPathFor,
   isExplainerEntry,
+  isHiddenChangeEntry,
   isNoteEntry,
   markThreadRead,
   rejectedPathFor,
@@ -20,6 +21,7 @@ import {
 import { resolvePreviewRange } from './previewComment';
 import type { EditorSelection, ThreadView } from './previewProtocol';
 import type { ExplainerStore } from './explainers';
+import type { HiddenChangeStore } from './hiddenChanges';
 import { ResolutionInbox } from './resolutionInbox';
 import {
   type Worktree,
@@ -173,6 +175,7 @@ export class ReviewCommentController implements vscode.Disposable {
     private readonly repoPath: string,
     extensionUri: vscode.Uri,
     private readonly explainers: ExplainerStore,
+    private readonly hiddenChanges: HiddenChangeStore,
   ) {
     this.agentIcon = vscode.Uri.joinPath(extensionUri, 'media', 'agent.svg');
     this.inbox = new ResolutionInbox((worktreePath, entries) =>
@@ -1216,6 +1219,12 @@ export class ReviewCommentController implements vscode.Disposable {
       if (isExplainerEntry(entry)) {
         // Not a comment: it only moves the PR's explainer row along.
         const problem = await this.explainers.apply(entry);
+        if (problem) rejected.push({ ...entry, reason: problem });
+        continue;
+      }
+      if (isHiddenChangeEntry(entry)) {
+        // Not a comment either: it moves the left side of the branch's diff.
+        const problem = await this.hiddenChanges.apply(worktreePath, entry);
         if (problem) rejected.push({ ...entry, reason: problem });
         continue;
       }

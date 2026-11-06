@@ -11,6 +11,7 @@ import {
   rejectedPathFor,
 } from './commentStore';
 import { parseExplainerEntry } from './explainers';
+import { parseHiddenChangeEntry } from './hiddenChanges';
 import { describeError, log } from './log';
 
 const DEBOUNCE_MS = 400;
@@ -142,7 +143,8 @@ async function claimBatch(worktreePath: string): Promise<InboxEntry[]> {
  *
  * An entry with an `id` is a resolution of that thread; one with a `file` and
  * a `body` and no `id` is a note to open; one with `"kind": "explainer"`
- * reports on a PR's explainer page. Anything else is skipped.
+ * reports on a PR's explainer page; one with `"kind": "hiddenChange"` registers
+ * or removes a hidden commit. Anything else is skipped.
  */
 export function parseEntries(raw: string): InboxEntry[] {
   const parsed = JSON.parse(raw) as unknown;
@@ -158,6 +160,11 @@ export function parseEntries(raw: string): InboxEntry[] {
     const explainer = parseExplainerEntry(item as Record<string, unknown>);
     if (explainer) {
       entries.push(explainer);
+      continue;
+    }
+    const hidden = parseHiddenChangeEntry(item as Record<string, unknown>);
+    if (hidden) {
+      entries.push(hidden);
       continue;
     }
     const resolution = parseResolution(item as Record<string, unknown>);

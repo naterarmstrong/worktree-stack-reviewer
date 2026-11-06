@@ -47,6 +47,7 @@ import {
   PREVIEW_EDITOR_VIEW_TYPE,
   type ReviewPreviewEditorProvider,
 } from './previewEditor';
+import type { HiddenChange, HiddenChangeStore, HiddenView } from './hiddenChanges';
 import type { HtmlPreviews } from './htmlPreview';
 import { rowUri, undecoratedRowUri } from './rowUri';
 import {
@@ -84,6 +85,9 @@ type Node =
   | CommentsSectionNode
   | CommentFileNode
   | CommentThreadNode
+  | HiddenChangesSectionNode
+  | HiddenChangeNode
+  | HiddenChangeFileNode
   | FolderNode
   | FileNode
   | MessageNode;
@@ -135,6 +139,18 @@ interface WorktreeCacheEntry {
    * trunk catches up it sits behind commits the branch was rebased onto.
    */
   mergeBase?: string;
+  /**
+   * The left side of `changedFiles` when the branch has hidden changes. It
+   * sits off the branch's history, so it is used as it stands, where `base`
+   * goes through a merge base.
+   */
+  view?: HiddenView;
+  /**
+   * Every path the branch changes, hidden or not. Set only while something is
+   * hidden, when `changedFiles` is short of it: a comment on a hidden file is
+   * still a comment on the diff.
+   */
+  fullPaths?: Set<string>;
 }
 
 /** A branch whose version listing the prefetcher still has to read. */
@@ -764,6 +780,78 @@ interface CommentDiff {
   parent: string;
 }
 
+/**
+ * The commits hiding part of the worktree's diff. Each row's checkbox puts that
+ * commit's changes back; its children show exactly what the row hides, so
+ * nothing is hidden on the agent's word alone.
+ */
+class HiddenChangesSectionNode extends vscode.TreeItem {
+  constructor(
+    public readonly worktreePath: string,
+    public readonly branch: string,
+    public readonly changes: HiddenChange[],
+    public readonly failed: ReadonlyMap<string, string>,
+  ) {
+    const on = changes.filter((c) => c.enabled).length;
+    super(`Hidden Changes (${on} of ${changes.length} on)`, vscode.TreeItemCollapsibleState.Expanded);
+    this.id = `hidden:${worktreePath}`;
+    this.iconPath = new vscode.ThemeIcon('eye-closed');
+    this.tooltip =
+      'Commits an agent built to hold a class of mechanical change. The diff below is taken against the base plus the ones ticked here. Expand one to see what it hides.';
+    this.contextValue = 'hiddenChanges';
+  }
+}
+
+class HiddenChangeNode extends vscode.TreeItem {
+  constructor(
+    public readonly worktreePath: string,
+    public readonly branch: string,
+    public readonly change: HiddenChange,
+    failure: string | undefined,
+  ) {
+    super(change.subject, vscode.TreeItemCollapsibleState.Collapsed);
+    this.id = `hidden:${worktreePath}:${change.commit}`;
+    const short = change.commit.slice(0, 7);
+    this.description = failure ? `${short}  not applied` : short;
+    this.tooltip = failure
+      ? `Not applied, so its changes are showing: ${failure}`
+      : `${change.commit}\n\nUntick to show these changes in the diff.`;
+    if (failure) {
+      this.iconPath = new vscode.ThemeIcon(
+        'warning',
+        new vscode.ThemeColor('problemsWarningIcon.foreground'),
+      );
+    }
+    this.checkboxState = change.enabled
+      ? vscode.TreeItemCheckboxState.Checked
+      : vscode.TreeItemCheckboxState.Unchecked;
+    this.contextValue = 'hiddenChange';
+  }
+}
+
+/** One file a hidden commit touches, opening just what that commit changed there. */
+class HiddenChangeFileNode extends vscode.TreeItem {
+  constructor(worktreePath: string, change: HiddenChange, file: ChangedFile) {
+    super(path.basename(file.path), vscode.TreeItemCollapsibleState.None);
+    this.id = `hidden:${worktreePath}:${change.commit}:${file.path}`;
+    const dir = path.dirname(file.path);
+    this.description = [file.status, dir === '.' ? '' : dir, lineCountLabel(file.added, file.removed)]
+      .filter(Boolean)
+      .join('  ');
+    this.resourceUri = rowUri(path.join(worktreePath, file.path));
+    this.command = {
+      command: 'vscode.diff',
+      title: 'Open Diff',
+      arguments: [
+        buildGitUri(worktreePath, `${change.commit}^`, file.oldPath ?? file.path),
+        buildGitUri(worktreePath, change.commit, file.path),
+        `${path.basename(file.path)} (hidden: ${change.subject})`,
+      ],
+    };
+    this.contextValue = 'hiddenChangeFile';
+  }
+}
+
 class CommentsSectionNode extends vscode.TreeItem {
   constructor(
     public readonly worktreePath: string,
@@ -978,6 +1066,7 @@ export class WorktreeProvider
     private readonly preview: ReviewPreviewEditorProvider,
     private readonly explainers: ExplainerStore,
     private readonly htmlPreviews: HtmlPreviews,
+    private readonly hiddenChanges: HiddenChangeStore,
   ) {
     const folder = vscode.workspace.workspaceFolders?.[0];
     this.repoPath = folder?.uri.fsPath ?? process.cwd();
@@ -996,6 +1085,20 @@ export class WorktreeProvider
     if (element instanceof StackBranchNode) return this.getStackBranchChildren(element);
     if (element instanceof CommentsSectionNode) {
       return getCommentFileNodes(element, await this.commentedFilesInDiff(element));
+    }
+    if (element instanceof HiddenChangesSectionNode) {
+      return element.changes.map(
+        (c) =>
+          new HiddenChangeNode(
+            element.worktreePath,
+            element.branch,
+            c,
+            element.failed.get(c.commit),
+          ),
+      );
+    }
+    if (element instanceof HiddenChangeNode) {
+      return this.hiddenChangeFiles(element);
     }
     if (element instanceof CommentFileNode) {
       return element.threads.map(
@@ -1148,6 +1251,7 @@ export class WorktreeProvider
           entry.changedFiles = undefined;
           entry.fileSplits = undefined;
         }
+        await this.updateView(w.path, entry);
         const stack = this.resolveStackName(w.path);
         return new WorktreeNode(
           w,
@@ -1274,6 +1378,8 @@ export class WorktreeProvider
     }
     const commentsSection = this.buildCommentsSection(parent);
     if (commentsSection) sections.push(commentsSection);
+    const hiddenSection = this.buildHiddenChangesSection(parent);
+    if (hiddenSection) sections.push(hiddenSection);
     return [...sections, ...fileNodes];
   }
 
@@ -1292,6 +1398,81 @@ export class WorktreeProvider
       threads,
       undefined,
     );
+  }
+
+  /** Rendered only when the branch has any, for the same reason Comments is. */
+  private buildHiddenChangesSection(
+    parent: WorktreeNode,
+  ): HiddenChangesSectionNode | undefined {
+    const changes = this.hiddenChanges.list(parent.worktree.branch);
+    if (changes.length === 0) return undefined;
+    return new HiddenChangesSectionNode(
+      parent.worktree.path,
+      parent.worktree.branch,
+      changes,
+      this.worktreeCache.get(parent.worktree.path)?.view?.failed ?? new Map(),
+    );
+  }
+
+  private async hiddenChangeFiles(node: HiddenChangeNode): Promise<Node[]> {
+    const { worktreePath, change } = node;
+    try {
+      const files = await diffNameStatus(worktreePath, `${change.commit}^`, change.commit);
+      if (files.length === 0) return [new MessageNode('This commit changes nothing.')];
+      return files.map((f) => new HiddenChangeFileNode(worktreePath, change, f));
+    } catch (err) {
+      return [new MessageNode(`Cannot read this commit: ${describe(err)}`)];
+    }
+  }
+
+  /** Moves a worktree's left side to match its hidden changes, dropping what was read from the old one. */
+  private async updateView(worktreePath: string, entry: WorktreeCacheEntry): Promise<void> {
+    const view = entry.mergeBase
+      ? await this.hiddenChanges.viewFor(worktreePath, entry.branch, entry.mergeBase)
+      : undefined;
+    if (view?.left !== entry.view?.left) {
+      entry.changedFiles = undefined;
+      entry.fileSplits = undefined;
+    }
+    entry.view = view;
+  }
+
+  /**
+   * Done here rather than left to the tree pass, which waits on `gh` and doesn't
+   * run at all while the sidebar is closed. An open diff shouldn't wait on either.
+   */
+  async hiddenChangesMoved(): Promise<void> {
+    await Promise.all(
+      [...this.worktreeCache].map(([worktreePath, entry]) => this.updateView(worktreePath, entry)),
+    );
+    this.refresh();
+  }
+
+  /** Applies hidden-change checkboxes; the rest of the batch is `setViewed`'s. */
+  async setHiddenEnabled(
+    items: readonly (readonly [unknown, vscode.TreeItemCheckboxState])[],
+  ): Promise<void> {
+    const byBranch = new Map<string, Map<string, boolean>>();
+    for (const [node, state] of items) {
+      if (!(node instanceof HiddenChangeNode)) continue;
+      const enabled = byBranch.get(node.branch) ?? new Map<string, boolean>();
+      enabled.set(node.change.commit, state === vscode.TreeItemCheckboxState.Checked);
+      byBranch.set(node.branch, enabled);
+    }
+    for (const [branch, enabled] of byBranch) {
+      await this.hiddenChanges.setEnabled(branch, enabled);
+    }
+  }
+
+  async removeHiddenChange(item: unknown): Promise<void> {
+    if (!(item instanceof HiddenChangeNode)) return;
+    const problem = await this.hiddenChanges.apply(item.worktreePath, {
+      kind: 'hiddenChange',
+      commit: item.change.commit,
+      branch: item.branch,
+      action: 'remove',
+    });
+    if (problem) void vscode.window.showErrorMessage(`Worktree Stack Reviewer: ${problem}`);
   }
 
   /**
@@ -1325,7 +1506,7 @@ export class WorktreeProvider
   ): Promise<Set<string>> {
     if (!section.diff) {
       const entry = this.worktreeCache.get(section.worktreePath);
-      return new Set((entry?.changedFiles ?? []).map((f) => f.path));
+      return entry?.fullPaths ?? new Set((entry?.changedFiles ?? []).map((f) => f.path));
     }
     try {
       return await this.branchChangedFiles(section.worktreePath, section.diff);
@@ -2091,15 +2272,24 @@ export class WorktreeProvider
     const includeUncommitted = config.get<boolean>('includeUncommitted', true);
     const layout = config.get<Layout>('layout', 'tree');
     const entry = this.cacheEntry(parent.worktree);
+    const hiding = (entry.view?.applied ?? 0) > 0;
     if (entry.changedFiles === undefined) {
       const start = Date.now();
-      const splits = this.readFileSplits(parent.worktree);
+      // gt counts the whole branch, which would disagree with a row that has
+      // lines hidden.
+      const splits = hiding
+        ? Promise.resolve(new Map<string, GtSplit>())
+        : this.readFileSplits(parent.worktree);
       try {
         entry.changedFiles = await listChangedFiles(
           parent.worktree.path,
-          parent.base,
+          entry.view?.ref ?? parent.base,
           includeUncommitted,
+          entry.view !== undefined,
         );
+        entry.fullPaths = hiding
+          ? pathsOf(await listChangedFiles(parent.worktree.path, parent.base, includeUncommitted))
+          : undefined;
         entry.fileSplits = await splits;
         log().info(
           `worktree ${parent.worktree.branch}: ${entry.changedFiles.length} changed files vs ${parent.base} in ${elapsed(start)}`,
@@ -2112,7 +2302,9 @@ export class WorktreeProvider
       }
     }
     const all = entry.changedFiles;
-    if (all.length === 0) return [new MessageNode('No changes vs base.')];
+    if (all.length === 0) {
+      return [new MessageNode(hiding ? 'Every change is hidden.' : 'No changes vs base.')];
+    }
     const lastVersions = this.lastVersionsFor(parent.worktree.path);
     const viewedOf = this.viewedLookup(parent.worktree.path);
     const splitOf = this.splitLookup(parent.worktree.path);
@@ -2167,7 +2359,10 @@ export class WorktreeProvider
     try {
       const { worktreePath, base, file } = args;
       log().info(`openDiff: ${file.status} ${file.path} in ${worktreePath} vs ${base}`);
-      const baseRef = await resolveMergeBase(worktreePath, base).catch(() => base);
+      // The view ref rather than what it points at, so a toggle redraws this tab.
+      const view = this.worktreeCache.get(worktreePath)?.view;
+      const baseRef =
+        view?.ref ?? (await resolveMergeBase(worktreePath, base).catch(() => base));
       const leftPath = file.oldPath ?? file.path;
       const left = buildGitUri(worktreePath, baseRef, leftPath);
 
@@ -2196,7 +2391,7 @@ export class WorktreeProvider
         return;
       }
 
-      const baseLabel = base.replace(/^refs\/heads\//, '');
+      const baseLabel = base.replace(/^refs\/heads\//, '') + (view?.applied ? ' + hidden' : '');
       const rightLabel = includeUncommitted ? 'working' : 'HEAD';
       const title = `${path.basename(file.path)} (${baseLabel} ↔ ${rightLabel})`;
       await vscode.commands.executeCommand('vscode.diff', left, right, title);
@@ -2815,7 +3010,7 @@ export class WorktreeProvider
       branch,
       base,
       baseSha,
-      changed: files ? new Set(files.map((f) => f.path)) : undefined,
+      changed: entry?.fullPaths ?? (files ? pathsOf(files) : undefined),
     };
   }
 
@@ -3053,6 +3248,7 @@ export class WorktreeProvider
     // worktree can have rewritten viewed.json since the last load, and another
     // window on the same repository can have renamed a stack.
     this.viewed.clear();
+    this.hiddenChanges.clear();
     this.stackNames.clear();
     this.worktreeNames.clear();
     this.explainers.clear();
@@ -3227,6 +3423,10 @@ function collectFiles(trie: TrieDir): ChangedFile[] {
   const files = [...trie.files];
   for (const child of trie.dirs.values()) files.push(...collectFiles(child));
   return files;
+}
+
+function pathsOf(files: ChangedFile[]): Set<string> {
+  return new Set(files.map((f) => f.path));
 }
 
 function describe(err: unknown): string {

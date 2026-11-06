@@ -1,6 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { ExplainerEntry } from './explainers';
+import type { HiddenChangeEntry } from './hiddenChanges';
 import { describeError, log } from './log';
 import { stateDirFor } from './statePaths';
 
@@ -152,10 +153,14 @@ export interface NoteEntry {
   snippet?: string;
 }
 
-export type InboxEntry = ResolutionEntry | NoteEntry | ExplainerEntry;
+export type InboxEntry = ResolutionEntry | NoteEntry | ExplainerEntry | HiddenChangeEntry;
 
 export function isNoteEntry(entry: InboxEntry): entry is NoteEntry {
   return !('id' in entry) && !isExplainerEntry(entry);
+}
+
+export function isHiddenChangeEntry(entry: InboxEntry): entry is HiddenChangeEntry {
+  return 'kind' in entry && entry.kind === 'hiddenChange';
 }
 
 export function isExplainerEntry(entry: InboxEntry): entry is ExplainerEntry {

@@ -13,6 +13,7 @@ import {
   PREVIEW_EDITOR_VIEW_TYPE,
   ReviewPreviewEditorProvider,
 } from './previewEditor';
+import { HiddenChangeStore } from './hiddenChanges';
 import { type OpenDiffArgs, WorktreeProvider } from './worktreeProvider';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -29,7 +30,18 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
   const explainers = new ExplainerStore(repoPath);
   context.subscriptions.push(explainers);
-  const comments = new ReviewCommentController(repoPath, context.extensionUri, explainers);
+  const hiddenChanges = new HiddenChangeStore(repoPath);
+  context.subscriptions.push(
+    hiddenChanges,
+    // An open diff reads its left side through the view ref, so it redraws here.
+    hiddenChanges.onDidMoveView(() => gitProvider.invalidate()),
+  );
+  const comments = new ReviewCommentController(
+    repoPath,
+    context.extensionUri,
+    explainers,
+    hiddenChanges,
+  );
   context.subscriptions.push(comments);
   void comments.ready();
 
@@ -53,6 +65,7 @@ export function activate(context: vscode.ExtensionContext): void {
     previewEditor,
     explainers,
     htmlPreviews,
+    hiddenChanges,
   );
   context.subscriptions.push(
     htmlPreviews,
@@ -89,7 +102,10 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
   context.subscriptions.push(worktreeProvider);
-  context.subscriptions.push(comments.onDidChange(() => worktreeProvider.refresh()));
+  context.subscriptions.push(
+    comments.onDidChange(() => worktreeProvider.refresh()),
+    hiddenChanges.onDidChange(() => void worktreeProvider.hiddenChangesMoved()),
+  );
 
   registerCommentCommands(context, comments, worktreeProvider, previewEditor);
   context.subscriptions.push(registerUnreadMarks());
@@ -105,6 +121,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(view);
   context.subscriptions.push(
     view.onDidChangeCheckboxState((e) => worktreeProvider.setViewed(e.items)),
+    view.onDidChangeCheckboxState((e) => worktreeProvider.setHiddenEnabled(e.items)),
     view.onDidExpandElement((e) => worktreeProvider.setBranchExpanded(e.element, true)),
     view.onDidCollapseElement((e) =>
       worktreeProvider.setBranchExpanded(e.element, false),
@@ -135,6 +152,9 @@ export function activate(context: vscode.ExtensionContext): void {
       void comments.invalidate();
       worktreeProvider.invalidate();
     }),
+    vscode.commands.registerCommand('worktreeReview.removeHiddenChange', (item) =>
+      worktreeProvider.removeHiddenChange(item),
+    ),
     vscode.commands.registerCommand('worktreeReview.openDiff', (item) => {
       log().info(`openDiff invoked: ${formatOpenDiffArg(item)}`);
       return worktreeProvider.openDiff(item);

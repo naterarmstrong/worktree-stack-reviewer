@@ -226,6 +226,12 @@
         "category": "Worktree Stack Reviewer"
       },
       {
+        "command": "worktreeReview.removeHiddenChange",
+        "title": "Remove Hidden Change",
+        "icon": "$(trash)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
         "command": "worktreeReview.deleteComment",
         "title": "Delete Comment",
         "icon": "$(trash)",
@@ -299,6 +305,10 @@
     "menus": {
       "commandPalette": [
         {
+          "command": "worktreeReview.removeHiddenChange",
+          "when": "false"
+        },
+        {
           "command": "worktreeReview.openExplainer",
           "when": "false"
         },
@@ -362,6 +372,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "worktreeReview.removeHiddenChange",
+          "when": "view == worktreeReview.changes && viewItem == hiddenChange",
+          "group": "inline"
+        },
         {
           "command": "worktreeReview.openFile",
           "when": "view == worktreeReview.changes && viewItem == file",

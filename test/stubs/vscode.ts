@@ -37,6 +37,21 @@ const channel = {
   dispose: noop,
 };
 
+/** Delivers synchronously, which is all a store's change event needs in a test. */
+export class EventEmitter<T> {
+  private readonly listeners = new Set<(value: T) => void>();
+  readonly event = (listener: (value: T) => void) => {
+    this.listeners.add(listener);
+    return { dispose: () => this.listeners.delete(listener) };
+  };
+  fire(value: T): void {
+    for (const listener of this.listeners) listener(value);
+  }
+  dispose(): void {
+    this.listeners.clear();
+  }
+}
+
 export const window = {
   createOutputChannel: () => channel,
 };
