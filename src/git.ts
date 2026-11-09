@@ -249,6 +249,30 @@ export async function mergeBaseOf(
   return call<string>('mergeBase', { repo: repoPath, left: a, right: b });
 }
 
+/**
+ * The ref to diff `head` against for a stack parent: the parent itself, or its
+ * `origin/` copy when `head` diverged from that one later. A local trunk that
+ * has not been pulled since the branch was rebased onto the remote would
+ * otherwise put every commit in between into the branch's diff — `gt` and the
+ * PR both measure from the newer of the two.
+ */
+export async function freshestParent(
+  repoPath: string,
+  head: string,
+  parent: string,
+): Promise<string> {
+  const remote = `origin/${parent.replace(/^refs\/heads\//, '')}`;
+  const [local, remoteBase] = await Promise.all([
+    mergeBaseOf(repoPath, head, parent).catch(() => ''),
+    mergeBaseOf(repoPath, head, remote).catch(() => ''),
+  ]);
+  if (!remoteBase || remoteBase === local) return parent;
+  if (!local) return remote;
+  // Both sit on head's history; the newer one has the other as its ancestor.
+  const older = await mergeBaseOf(repoPath, local, remoteBase).catch(() => '');
+  return older === local ? remote : parent;
+}
+
 export interface StackInfo {
   /** Branches in this worktree's stack, ordered tip → bottom; trunk excluded. */
   branches: string[];

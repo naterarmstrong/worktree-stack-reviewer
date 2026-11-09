@@ -5,6 +5,7 @@ import {
   type Worktree,
   checkoutBranch,
   createBranchAt,
+  freshestParent,
   getCurrentBranch,
   getStack,
   getStackTrunk,
@@ -135,6 +136,26 @@ describe('git', () => {
     expect(await mergeBaseOf(fixture.review, 'main', 'feature')).toBe(
       await revParse(fixture.repo, 'main'),
     );
+  });
+
+  test('diffs against origin’s copy of a parent the branch was rebased past', async () => {
+    // origin/main one commit ahead of a local main nobody pulled, and a branch
+    // rebased onto it.
+    const tree = git(fixture.repo, ['rev-parse', 'main^{tree}']).trim();
+    const upstream = git(fixture.repo, ['commit-tree', tree, '-p', 'main', '-m', 'upstream']).trim();
+    const rebased = git(fixture.repo, ['commit-tree', tree, '-p', upstream, '-m', 'rebased']).trim();
+    git(fixture.repo, ['update-ref', 'refs/remotes/origin/main', upstream]);
+    git(fixture.repo, ['branch', 'rebased', rebased]);
+    try {
+      expect(await freshestParent(fixture.repo, 'rebased', 'main')).toBe('origin/main');
+      // Diverged from main itself: the local copy is as new as the remote one.
+      expect(await freshestParent(fixture.repo, 'feature', 'main')).toBe('main');
+      // No remote copy at all.
+      expect(await freshestParent(fixture.repo, 'rebased', 'feature')).toBe('feature');
+    } finally {
+      git(fixture.repo, ['branch', '-D', 'rebased']);
+      git(fixture.repo, ['update-ref', '-d', 'refs/remotes/origin/main']);
+    }
   });
 
   test('reports no stack trunk for a repository with no stacks', async () => {

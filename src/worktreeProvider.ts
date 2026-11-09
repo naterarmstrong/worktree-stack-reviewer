@@ -17,6 +17,7 @@ import {
   listUncommittedChanges,
   listWorktrees,
   mainWorktreePath,
+  freshestParent,
   mergeBaseOf,
   resolveMergeBase,
   revParse,
@@ -1231,6 +1232,7 @@ export class WorktreeProvider
     }
 
     const needStack = useStack || showPullRequests;
+    const watchedRefs = new Set<string>();
     const nodes = await Promise.all(
       shown.map(async (w) => {
         const entry = this.cacheEntry(w);
@@ -1242,7 +1244,8 @@ export class WorktreeProvider
           entry.stack = await getStack(w.path, w.branch);
         }
         const parent = useStack ? (entry.stack?.parent ?? null) : null;
-        const base = parent ?? fallbackBase;
+        if (parent) watchedRefs.add(parent);
+        const base = parent ? await freshestParent(w.path, 'HEAD', parent) : fallbackBase;
         const source: 'stack' | 'fallback' = parent ? 'stack' : 'fallback';
         entry.base = base;
         const mergeBase = await resolveMergeBase(w.path, base).catch(() => undefined);
@@ -1263,7 +1266,9 @@ export class WorktreeProvider
         );
       }),
     );
-    this.watcher.setBaseRefs(nodes.map((n) => n.base));
+    // The stack parent as well as the ref chosen for it: a pull that brings
+    // the local copy level with origin changes which one the diff uses.
+    this.watcher.setBaseRefs([...watchedRefs, ...nodes.map((n) => n.base)]);
     if (showPullRequests) await this.fillMissingPrs(shown);
     // Started from here rather than only from the branch rows: a refresh the
     // watcher fired because a branch moved re-renders those rows with counts
@@ -1551,7 +1556,8 @@ export class WorktreeProvider
     worktreePath: string,
     diff: CommentDiff,
   ): Promise<string> {
-    const base = await mergeBaseOf(worktreePath, diff.parent, diff.branch).catch(
+    const parent = await freshestParent(worktreePath, diff.branch, diff.parent);
+    const base = await mergeBaseOf(worktreePath, parent, diff.branch).catch(
       () => '',
     );
     return base || diff.parent;
