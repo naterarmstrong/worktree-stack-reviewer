@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import { listOpenPrsForBranches, submitPrReview } from '../../src/gh';
+import { listOpenPrsForBranches, prBaseCommits, submitPrReview } from '../../src/gh';
 
 describe('submitPrReview', () => {
   let dir: string;
@@ -111,6 +111,49 @@ describe('listOpenPrsForBranches', () => {
 
   test('asks nothing for no branches', async () => {
     expect(await listOpenPrsForBranches(dir, [])).toEqual([]);
+    expect(fs.existsSync(path.join(dir, 'args'))).toBe(false);
+  });
+});
+
+describe('prBaseCommits', () => {
+  let dir: string;
+  let originalPath: string | undefined;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-gh-'));
+    fs.writeFileSync(
+      path.join(dir, 'gh'),
+      `#!/bin/sh\nprintf '%s\\n' "$@" > "${dir}/args"\ncat "${dir}/response"\n`,
+      { mode: 0o755 },
+    );
+    originalPath = process.env.PATH;
+    process.env.PATH = `${dir}${path.delimiter}${originalPath}`;
+  });
+
+  afterEach(() => {
+    process.env.PATH = originalPath;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('reads the parent of each PR’s oldest commit, skipping PRs without one', async () => {
+    const sits = (oid: string) => ({
+      commits: { nodes: [{ commit: { parents: { nodes: [{ oid }] } } }] },
+    });
+    fs.writeFileSync(
+      path.join(dir, 'response'),
+      JSON.stringify({
+        data: { repository: { p0: sits('abc123'), p1: { commits: { nodes: [] } }, p2: null } },
+      }),
+    );
+    const bases = await prBaseCommits(dir, [12, 34, 56]);
+    expect([...bases]).toEqual([[12, 'abc123']]);
+    const args = fs.readFileSync(path.join(dir, 'args'), 'utf8');
+    expect(args).toContain('-F\nn0=12\n');
+    expect(args).toContain('-F\nn2=56\n');
+  });
+
+  test('asks nothing for no PRs', async () => {
+    expect((await prBaseCommits(dir, [])).size).toBe(0);
     expect(fs.existsSync(path.join(dir, 'args'))).toBe(false);
   });
 });

@@ -18,6 +18,7 @@ import {
   listWorktrees,
   mainWorktreePath,
   freshestParent,
+  laterBase,
   mergeBaseOf,
   resolveMergeBase,
   revParse,
@@ -32,6 +33,7 @@ import {
   type OpenPr,
   listOpenPrs,
   listOpenPrsForBranches,
+  prBaseCommits,
   prCommentCountsBySha,
 } from './gh';
 import { buildGitUri } from './gitContentProvider';
@@ -237,11 +239,14 @@ function isReviewWorktree(worktreePath: string): boolean {
   return name !== '' && path.basename(worktreePath) === name;
 }
 
+/** What named a worktree's base: its stack parent, the setting, or its PR. */
+type BaseSource = 'stack' | 'fallback' | 'pr';
+
 class WorktreeNode extends vscode.TreeItem {
   constructor(
     public readonly worktree: Worktree,
     public readonly base: string,
-    public readonly baseSource: 'stack' | 'fallback',
+    public readonly baseSource: BaseSource,
     public readonly isReview: boolean,
     /** What this worktree's rows read: its own name, or its stack's. */
     name: string | undefined,
@@ -251,7 +256,8 @@ class WorktreeNode extends vscode.TreeItem {
     // A name is what the worktree is being thought of as, so it takes the row
     // and the branch moves into the description.
     super(name ?? worktree.branch, vscode.TreeItemCollapsibleState.Expanded);
-    const baseLabel = base.replace(/^refs\/heads\//, '');
+    const baseLabel =
+      baseSource === 'pr' ? base.slice(0, 7) : base.replace(/^refs\/heads\//, '');
     this.id = `worktree:${worktree.path}`;
     const place = stackPlace(stack, worktree.branch, name !== undefined);
     const bits: string[] = [];
@@ -991,6 +997,13 @@ export class WorktreeProvider
    * found or not, so a branch with no PR is asked about once per fetch.
    */
   private readonly prBranchesLookedUp = new Set<string>();
+  /**
+   * The commit each PR sits on, by PR number, and the PRs already asked about
+   * since the PR list was last fetched. A force-push that rebases a PR comes
+   * with a fresh fetch, which asks again.
+   */
+  private readonly prBases = new Map<number, string>();
+  private readonly prBasesLookedUp = new Set<number>();
   /** Review-comment counts per commit sha, keyed by PR number. */
   private readonly prCommentCache = new Map<
     number,
@@ -1232,21 +1245,41 @@ export class WorktreeProvider
     }
 
     const needStack = useStack || showPullRequests;
+    // Not asked for on trunk: nothing reads the answer there. Re-read on every
+    // pass rather than cached by HEAD: `gh stack add` or `gt track` changes a
+    // stack without moving any worktree's HEAD, and the read is one small file.
+    if (needStack) {
+      await Promise.all(
+        shown
+          .filter((w) => w.branch !== this.trunkBranch())
+          .map(async (w) => {
+            this.cacheEntry(w).stack = await getStack(w.path, w.branch);
+          }),
+      );
+    }
+    // Before the bases: a branch's PR can name a newer base than any ref here.
+    if (showPullRequests) {
+      await this.fillMissingPrs(shown);
+      await this.fillPrBases(shown);
+    }
+    const prByHead = new Map(
+      (this.prCache ?? []).map((p) => [p.headRefName, p] as const),
+    );
     const watchedRefs = new Set<string>();
     const nodes = await Promise.all(
       shown.map(async (w) => {
         const entry = this.cacheEntry(w);
-        // Not asked for on trunk: nothing reads the answer there. Re-read on
-        // every pass rather than cached by HEAD: `gh stack add` or `gt track`
-        // changes a stack without moving any worktree's HEAD, and the read is
-        // one small file.
-        if (needStack && w.branch !== this.trunkBranch()) {
-          entry.stack = await getStack(w.path, w.branch);
-        }
         const parent = useStack ? (entry.stack?.parent ?? null) : null;
-        if (parent) watchedRefs.add(parent);
-        const base = parent ? await freshestParent(w.path, 'HEAD', parent) : fallbackBase;
-        const source: 'stack' | 'fallback' = parent ? 'stack' : 'fallback';
+        const ref = parent ? await freshestParent(w.path, 'HEAD', parent) : fallbackBase;
+        watchedRefs.add(parent ?? ref);
+        // A ref nobody has fetched since the PR was rebased sits behind the
+        // base GitHub diffs against, and every commit in between would show up
+        // as the branch's own.
+        const pr = prByHead.get(w.branch);
+        const prBase = pr ? this.prBases.get(pr.number) : undefined;
+        const base = prBase ? await laterBase(w.path, 'HEAD', ref, prBase) : ref;
+        const source: BaseSource =
+          base === prBase ? 'pr' : parent ? 'stack' : 'fallback';
         entry.base = base;
         const mergeBase = await resolveMergeBase(w.path, base).catch(() => undefined);
         if (mergeBase !== entry.mergeBase) {
@@ -1269,7 +1302,6 @@ export class WorktreeProvider
     // The stack parent as well as the ref chosen for it: a pull that brings
     // the local copy level with origin changes which one the diff uses.
     this.watcher.setBaseRefs([...watchedRefs, ...nodes.map((n) => n.base)]);
-    if (showPullRequests) await this.fillMissingPrs(shown);
     // Started from here rather than only from the branch rows: a refresh the
     // watcher fired because a branch moved re-renders those rows with counts
     // that are now stale, and nothing on the row itself knows that.
@@ -1312,6 +1344,7 @@ export class WorktreeProvider
       this.prCacheError = undefined;
       // The fresh list drops whatever the lookup added, so ask again.
       this.prBranchesLookedUp.clear();
+      this.prBasesLookedUp.clear();
       this.prBodies.setBodies(this.prCache);
       log().info(
         `fetched ${this.prCache.length} open PRs from gh in ${elapsed(start)}`,
@@ -1358,6 +1391,26 @@ export class WorktreeProvider
       );
     } catch (err) {
       log().warn(`gh pr lookup by branch failed: ${describeError(err)}`);
+    }
+  }
+
+  /** Looks up the commit each shown worktree's PR sits on, once per PR fetch. */
+  private async fillPrBases(worktrees: Worktree[]): Promise<void> {
+    const byHead = new Map((this.prCache ?? []).map((p) => [p.headRefName, p] as const));
+    const numbers = worktrees
+      .map((w) => byHead.get(w.branch)?.number)
+      .filter((n): n is number => n !== undefined && !this.prBasesLookedUp.has(n));
+    if (numbers.length === 0) return;
+    // Marked before the call, as with the branch lookup above.
+    for (const n of numbers) this.prBasesLookedUp.add(n);
+    const start = Date.now();
+    try {
+      for (const [n, oid] of await prBaseCommits(this.repoPath, numbers)) {
+        this.prBases.set(n, oid);
+      }
+      log().info(`looked up the base of ${numbers.length} PR(s) in ${elapsed(start)}`);
+    } catch (err) {
+      log().warn(`gh pr base lookup failed: ${describeError(err)}`);
     }
   }
 
@@ -3262,6 +3315,8 @@ export class WorktreeProvider
     this.prCacheError = undefined;
     this.prCacheAt = 0;
     this.prBranchesLookedUp.clear();
+    this.prBases.clear();
+    this.prBasesLookedUp.clear();
     this.prCommentCache.clear();
     this.prCommentsPrefetched.clear();
     this.refresh();

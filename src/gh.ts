@@ -117,6 +117,45 @@ fragment pr on PullRequestConnection {
 }
 
 /**
+ * The commit each PR sits on: the first parent of its oldest commit, keyed by
+ * PR number. It lies on the head branch's own history, so a clone holding the
+ * branch has it even when its copy of the base branch was never fetched past
+ * it. A PR with no commits is absent from the result.
+ */
+export async function prBaseCommits(
+  repoPath: string,
+  numbers: number[],
+): Promise<Map<number, string>> {
+  const bases = new Map<number, string>();
+  if (numbers.length === 0) return bases;
+  const vars = numbers.map((_, i) => `, $n${i}: Int!`).join('');
+  const fields = numbers
+    .map(
+      (_, i) =>
+        `p${i}: pullRequest(number: $n${i}) { commits(first: 1) { nodes { commit { parents(first: 1) { nodes { oid } } } } } }`,
+    )
+    .join('\n    ');
+  const query = `query($owner: String!, $name: String!${vars}) {
+  repository(owner: $owner, name: $name) {
+    ${fields}
+  }
+}`;
+  const args = ['api', 'graphql', '-F', 'owner={owner}', '-F', 'name={repo}', '-f', `query=${query}`];
+  numbers.forEach((n, i) => args.push('-F', `n${i}=${n}`));
+  const stdout = await execTimed('gh', args, repoPath, `gh pr base (${numbers.length} PRs)`);
+  type Node = {
+    commits?: { nodes?: { commit?: { parents?: { nodes?: { oid?: string }[] } } }[] };
+  } | null;
+  const repo = (JSON.parse(stdout) as { data: { repository: Record<string, Node> } }).data
+    .repository;
+  numbers.forEach((n, i) => {
+    const oid = repo[`p${i}`]?.commits?.nodes?.[0]?.commit?.parents?.nodes?.[0]?.oid;
+    if (oid) bases.set(n, oid);
+  });
+  return bases;
+}
+
+/**
  * How many inline review comments each commit of a PR received, keyed by the
  * commit the comment was written against. `original_commit_id` is that commit;
  * `commit_id` moves when the comment is re-anchored onto a later push, which

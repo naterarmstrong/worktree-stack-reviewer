@@ -24,7 +24,10 @@ repository. Under each one:
   `fallbackBase` setting (default `origin/main`); the worktree's tooltip names
   it and says which of the two it came from. A stack parent is read as its
   `origin/` copy when the branch was rebased past the local one, so a trunk
-  you haven't pulled doesn't put everything merged since into the diff. Files open as diffs with the
+  you haven't pulled doesn't put everything merged since into the diff. A
+  branch with an open PR measures from the commit the PR sits on when that is
+  newer, so an `origin/main` you haven't fetched since the PR was rebased
+  doesn't either; the tooltip then names that commit. Files open as diffs with the
   base on the left and the working tree on the right — the right side is the
   real file, so you can edit during review. An added or deleted file exists on
   only one side, so it opens as a single editor instead: the working file for

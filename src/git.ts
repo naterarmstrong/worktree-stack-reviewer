@@ -261,16 +261,29 @@ export async function freshestParent(
   head: string,
   parent: string,
 ): Promise<string> {
-  const remote = `origin/${parent.replace(/^refs\/heads\//, '')}`;
-  const [local, remoteBase] = await Promise.all([
-    mergeBaseOf(repoPath, head, parent).catch(() => ''),
-    mergeBaseOf(repoPath, head, remote).catch(() => ''),
+  return laterBase(repoPath, head, parent, `origin/${parent.replace(/^refs\/heads\//, '')}`);
+}
+
+/**
+ * `base`, or `other` when `head` diverged from `other` later. `other` may be a
+ * bare commit, such as the base tip GitHub reports for a PR; one that is
+ * missing locally leaves `base` in place.
+ */
+export async function laterBase(
+  repoPath: string,
+  head: string,
+  base: string,
+  other: string,
+): Promise<string> {
+  const [mine, theirs] = await Promise.all([
+    mergeBaseOf(repoPath, head, base).catch(() => ''),
+    mergeBaseOf(repoPath, head, other).catch(() => ''),
   ]);
-  if (!remoteBase || remoteBase === local) return parent;
-  if (!local) return remote;
+  if (!theirs || theirs === mine) return base;
+  if (!mine) return other;
   // Both sit on head's history; the newer one has the other as its ancestor.
-  const older = await mergeBaseOf(repoPath, local, remoteBase).catch(() => '');
-  return older === local ? remote : parent;
+  const older = await mergeBaseOf(repoPath, mine, theirs).catch(() => '');
+  return older === mine ? other : base;
 }
 
 export interface StackInfo {

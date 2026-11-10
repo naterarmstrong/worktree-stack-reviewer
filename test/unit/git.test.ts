@@ -10,6 +10,7 @@ import {
   getStack,
   getStackTrunk,
   isAgentWorktreeOnItsOwnBranch,
+  laterBase,
   listChangedFiles,
   listLocalBranches,
   listUncommittedChanges,
@@ -155,6 +156,24 @@ describe('git', () => {
     } finally {
       git(fixture.repo, ['branch', '-D', 'rebased']);
       git(fixture.repo, ['update-ref', '-d', 'refs/remotes/origin/main']);
+    }
+  });
+
+  test('diffs against a PR’s base commit when the base ref has not caught up', async () => {
+    // A base tip GitHub reports that no local ref points at, and a branch
+    // rebased onto it.
+    const tree = git(fixture.repo, ['rev-parse', 'main^{tree}']).trim();
+    const upstream = git(fixture.repo, ['commit-tree', tree, '-p', 'main', '-m', 'upstream']).trim();
+    const rebased = git(fixture.repo, ['commit-tree', tree, '-p', upstream, '-m', 'rebased']).trim();
+    git(fixture.repo, ['branch', 'rebased', rebased]);
+    try {
+      expect(await laterBase(fixture.repo, 'rebased', 'main', upstream)).toBe(upstream);
+      // The ref is already as new: it stays.
+      expect(await laterBase(fixture.repo, 'rebased', upstream, 'main')).toBe(upstream);
+      // A commit this clone does not have.
+      expect(await laterBase(fixture.repo, 'rebased', 'main', 'f'.repeat(40))).toBe('main');
+    } finally {
+      git(fixture.repo, ['branch', '-D', 'rebased']);
     }
   });
 
