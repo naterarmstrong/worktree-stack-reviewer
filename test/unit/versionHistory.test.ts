@@ -83,6 +83,17 @@ describe('versionForComment', () => {
   test('attributes nothing when the comment carries no readable date', () => {
     expect(versionForComment({ createdAt: 'whenever' }, VERSIONS)).toBeUndefined();
   });
+
+  test('never dates a comment back to a commit the branch only passed through', () => {
+    // p2 arrived under p3 in one fetch, so both carry the fetch's date.
+    const fetched = VERSIONS.map((v) =>
+      v.version === 2 ? { ...v, tip: false, date: VERSIONS[0].date } : v,
+    );
+    const reordered = [fetched[1], fetched[0], fetched[2]];
+    expect(versionForComment({ createdAt: '2026-09-02T15:00:00-07:00' }, reordered)).toBe(3);
+    // A comment naming its sha still lands on it.
+    expect(versionForComment({ sha: 'bbbbbbbbbbbb', createdAt: WHILE_P2 }, fetched)).toBe(2);
+  });
 });
 
 const lines = (add: number, del: number) => ({ add, del });
@@ -142,6 +153,19 @@ describe('fromGt', () => {
   test('keeps every sha a version held, oldest first', () => {
     expect(p2.shas).toEqual(['b2', 'c2']);
     expect(p2.current).toBe(true);
+  });
+
+  test('treats a listing from a gt without tip flags as all tips', () => {
+    expect(p2.tip).toBe(true);
+    expect(p1.tip).toBe(true);
+  });
+
+  test('marks a commit the branch only passed through', () => {
+    const passed = fromGt({
+      ...GT_LISTING,
+      versions: GT_LISTING.versions.map((v) => (v.version === 1 ? { ...v, tip: false } : v)),
+    });
+    expect(passed.versions.map((v) => v.tip)).toEqual([true, false]);
   });
 
   test('counts a version seen on the remote by a fetch as pushed', () => {

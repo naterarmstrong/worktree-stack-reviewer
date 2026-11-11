@@ -762,6 +762,7 @@ class VersionNode extends vscode.TreeItem {
     const bits: string[] = [];
     if (v.current) bits.push('current');
     bits.push(v.action);
+    if (v.tip === false) bits.push('passed through');
     if (v.pushed) {
       bits.push(v.push_seq !== undefined ? `push #${v.push_seq}` : 'pushed');
     }
@@ -3751,6 +3752,12 @@ function versionTooltip(
     '',
     `\`${v.sha.slice(0, 7)}\` · ${v.date.slice(0, 16).replace('T', ' ')} · ${v.action}${pushed}`,
   ];
+  if (v.tip === false) {
+    lines.push(
+      '',
+      'Passed through: this commit arrived under a later one and was never the branch tip in this clone.',
+    );
+  }
   const files = v.delta?.files ?? [];
   if (files.length > 0) {
     lines.push('');

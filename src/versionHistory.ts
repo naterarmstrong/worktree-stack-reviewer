@@ -26,7 +26,10 @@ export interface VersionDelta {
   generated_files?: string[];
 }
 
-/** One version (amend) of a stacked branch's single commit. */
+/**
+ * One version of a stacked branch: an amend of its single commit, or, on a
+ * branch with several commits, one of those commits.
+ */
 export interface BranchVersion {
   version: number;
   sha: string;
@@ -36,6 +39,12 @@ export interface BranchVersion {
   shas: string[];
   pushed: boolean;
   current: boolean;
+  /**
+   * False for a commit the branch only passed through: it arrived under a later
+   * commit (a fetch that brought in several at once) and was never the tip in
+   * this clone. Its date is the date of the move that brought it.
+   */
+  tip?: boolean;
   push_seq?: number;
   push_sha?: string;
   delta?: VersionDelta;
@@ -93,6 +102,8 @@ interface GtVersion {
   date: string;
   action: string;
   current: boolean;
+  /** Absent from gt versions that only knew single-commit branches. */
+  tip?: boolean;
   remote: { pushed: boolean; fetched: boolean; tip: boolean };
   /** Every move onto this patch, oldest first. */
   moves: { sha: string }[];
@@ -134,6 +145,7 @@ export function fromGt(listing: GtListing): VersionListing {
         // On the remote at some point, as far as this clone has seen.
         pushed: v.remote.pushed || v.remote.fetched || v.remote.tip,
         current: v.current,
+        tip: v.tip !== false,
       };
       if (v.delta?.conflict) {
         out.delta = { conflict: true };
@@ -222,7 +234,9 @@ export function versionForComment(
   // than as the strings they arrive in.
   const written = Date.parse(comment.createdAt);
   if (Number.isNaN(written)) return undefined;
-  const current = versions.find((v) => Date.parse(v.date) <= written);
+  // A commit the branch only passed through shares its date with the tip that
+  // brought it, and nobody was looking at it then.
+  const current = versions.find((v) => v.tip !== false && Date.parse(v.date) <= written);
   return (current ?? versions[versions.length - 1]).version;
 }
 

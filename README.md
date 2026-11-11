@@ -138,7 +138,12 @@ repository. Under each one:
   Beside the LOC row, the branch lists its **patches** — the amend history of
   the branch's single commit, read from `gt history` (see
   [Requirements](#requirements)) — with each version's date, action
-  (amend/restack/…), push marker, and delta vs the previous version. A patch is marked for the comments left on it, with
+  (amend/restack/…), push marker, and delta vs the previous version. A branch
+  with several commits lists each commit as a patch instead, and its diff is
+  the branch as of that commit, from where the oldest commit sits. A commit
+  that arrived under a later one, such as the first two of three commits a
+  fetch brought in at once, is marked **passed through**. It was never the
+  branch tip, so a comment without a recorded commit is never dated back to it. A patch is marked for the comments left on it, with
   the same two characters its branch row uses: `¶` for inline PR review
   comments written against that commit, `✎` for review comments written here
   while it was the tip. The tooltip says how many of each.
