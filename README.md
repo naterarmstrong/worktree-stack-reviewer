@@ -190,7 +190,7 @@ repository. Under each one:
   styles and scripts, Google Fonts, scripts from cdnjs, jsDelivr and unpkg, and
   `data:` images; nothing else loads, and the page can make no requests.
   `data-theme` follows VS Code's light or dark theme, and links open in the
-  browser.
+  browser. A PR's explainer takes [review comments](#comments-on-an-explainer).
 
   Line counts do not wait on the work behind them: the row shows `…` until they
   arrive, so no git run sits on the critical path of the first paint. Expanding
@@ -534,6 +534,34 @@ the lines it covered and their text, and that text is what re-finds them after
 the description changes on GitHub. That check runs when the description is
 opened as a source editor, and marks a thread drifted rather than pointing it
 at lines it never covered.
+
+#### Comments on an explainer
+
+A PR's [explainer](#the-agent-inbox) takes comments the same way. Selecting
+text on the page raises the **💬 Comment** button, and the composer opens below
+the block holding the selection, with the selected text quoted. Threads are
+drawn as cards on the page, with a reply box and a resolve button; resolved
+ones fold to a one-line chip. Each card sits in its own shadow root, so the
+page's styles can't reach it.
+
+The page is HTML with no source lines, so a thread is anchored by the text it
+was written on (up to 500 characters, kept in `snippet`) and the heading above
+that text (`section`). Each time the page is drawn, the text is found again,
+under that heading when it appears more than once, and the card goes after the
+block holding it, outside any list, table, code block, diagram or grid. When
+the agent rewrites the page and the text is gone, the card goes after the
+heading instead, or at the top of the page when the heading is gone too, and
+says that its text is no longer on the page.
+
+The page needs to name its PR to take comments: the PR whose explainer the
+agent [reported](#the-agent-inbox) at that path, or else the number in a
+`pr-<n>…` file name. Its threads are stored as `PR-142.explainer.html`, with
+`"side": "explainer"`, on the PR's branch, beside the worktree that has it
+checked out or in the main checkout's store when none does. They appear in
+the Comments section grouped under `#142`, with the heading as each row's
+location. Clicking a row opens the explainer and scrolls to the thread.
+Replies, resolution, the JSON export (with no `inDiff`), and the resolutions
+inbox all treat them as ordinary threads.
 
 What the review preview does not do (yet): render mermaid diagrams — the
 mermaid extension draws client-side inside the built-in preview's webview, so

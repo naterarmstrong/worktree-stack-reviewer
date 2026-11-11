@@ -19,8 +19,8 @@ import {
   unreadCount,
 } from './commentStore';
 import { resolvePreviewRange } from './previewComment';
-import type { EditorSelection, ThreadView } from './previewProtocol';
-import type { ExplainerStore } from './explainers';
+import type { EditorSelection, ExplainerAnchor, ThreadView } from './previewProtocol';
+import { type ExplainerStore, explainerFileName } from './explainers';
 import type { HiddenChangeStore } from './hiddenChanges';
 import { ResolutionInbox } from './resolutionInbox';
 import {
@@ -98,6 +98,8 @@ export interface ExportedComment {
   resolved: boolean;
   anchorDrifted?: boolean;
   snippet?: string;
+  /** On an explainer comment, the heading the quoted text sat under. */
+  section?: string;
   messages: { author: string; body: string }[];
 }
 
@@ -369,6 +371,9 @@ export class ReviewCommentController implements vscode.Disposable {
     const desired = new Map<string, { stored: StoredThread; uri: vscode.Uri }>();
     for (const w of this.worktrees) {
       for (const { thread } of this.threadsForBranch(w.branch)) {
+        // An explainer page is a webview, not a document a comment thread can
+        // be attached to; the page draws its threads itself.
+        if (thread.side === 'explainer') continue;
         desired.set(thread.id, { stored: thread, uri: this.uriFor(w.path, thread) });
       }
     }
@@ -466,6 +471,23 @@ export class ReviewCommentController implements vscode.Disposable {
       best = { worktreePath: w.path, file, side: 'working' };
     }
     return best;
+  }
+
+  /**
+   * Where comments on PR `pr`'s explainer go. Like a description, the page
+   * belongs to the PR's branch, so they are stored beside whichever worktree
+   * has it checked out, and in the main checkout's file when none does.
+   */
+  explainerTarget(pr: number, branch: string): CommentTarget | undefined {
+    const holder =
+      this.worktrees.find((w) => w.branch === branch) ?? this.worktrees[0];
+    if (!holder) return undefined;
+    return {
+      worktreePath: holder.path,
+      file: explainerFileName(pr),
+      side: 'explainer',
+      branch,
+    };
   }
 
   private async provideCommentingRanges(
@@ -643,10 +665,42 @@ export class ReviewCommentController implements vscode.Disposable {
     return true;
   }
 
+  /**
+   * Creates a thread from a selection on an explainer page, anchored by the
+   * text selected rather than by line.
+   */
+  async createExplainerThread(
+    target: CommentTarget,
+    anchor: ExplainerAnchor,
+    body: string,
+  ): Promise<void> {
+    await this.ready();
+    const branch = this.branchForTarget(target);
+    if (!branch) return;
+    const createdAt = new Date().toISOString();
+    this.store.add(target.worktreePath, {
+      id: this.store.newId(),
+      branch,
+      sha: await this.headShaOf(target.worktreePath, branch),
+      file: target.file,
+      side: target.side,
+      snippet: anchor.quote,
+      section: anchor.section,
+      resolved: false,
+      createdAt,
+      comments: [{ id: this.store.newId(), author: this.authorName, body, createdAt }],
+    });
+    await this.commit(target.worktreePath);
+  }
+
   /** Threads on this document for the review preview editor, sorted by line. */
   threadsForDocument(uri: vscode.Uri): ThreadView[] {
     const target = this.resolveTarget(uri);
-    if (!target) return [];
+    return target ? this.threadsForTarget(target) : [];
+  }
+
+  /** Threads for a preview to draw, sorted by line; an explainer's carry their quote. */
+  threadsForTarget(target: CommentTarget): ThreadView[] {
     const branch = this.branchForTarget(target);
     if (!branch) return [];
     return sortThreads(
@@ -660,6 +714,8 @@ export class ReviewCommentController implements vscode.Disposable {
       endLine: t.endLine,
       resolved: t.resolved,
       drifted: t.drifted,
+      quote: t.side === 'explainer' ? t.snippet : undefined,
+      section: t.section,
       comments: t.comments.map((c) => ({
         author: c.author,
         body: c.body,
@@ -1166,12 +1222,14 @@ export class ReviewCommentController implements vscode.Disposable {
       side: t.side,
       startLine: t.startLine,
       endLine: t.endLine,
-      // A description is not a file in the worktree, so whether the diff
-      // touches it is not a question with an answer.
-      inDiff: t.side === 'pr' ? undefined : meta.changed?.has(t.file),
+      // A description or an explainer is not a file in the worktree, so
+      // whether the diff touches it is not a question with an answer.
+      inDiff:
+        t.side === 'pr' || t.side === 'explainer' ? undefined : meta.changed?.has(t.file),
       resolved: t.resolved,
       anchorDrifted: t.drifted ? true : undefined,
       snippet: t.snippet,
+      section: t.section,
       messages: t.comments.map((c) => ({ author: c.author, body: c.body })),
     }));
     return {

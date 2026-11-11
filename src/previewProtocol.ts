@@ -26,6 +26,9 @@ export interface ThreadView {
   endLine?: number;
   resolved: boolean;
   drifted?: boolean;
+  /** On an explainer thread: the text it was written on, and the heading above it. */
+  quote?: string;
+  section?: string;
   comments: ThreadCommentView[];
 }
 
@@ -146,4 +149,60 @@ function isLine(value: unknown): value is number {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
+}
+
+/**
+ * Where a comment on an explainer page sits. The page is HTML with no source
+ * lines, so the anchor is the text that was selected and the heading it sat
+ * under, which the page finds again each time it is drawn.
+ */
+export interface ExplainerAnchor {
+  quote: string;
+  section?: string;
+}
+
+/** Longest quote kept; a long selection is anchored by how it begins. */
+export const MAX_EXPLAINER_QUOTE = 500;
+
+const MAX_EXPLAINER_SECTION = 200;
+
+export type ExplainerToHostMessage =
+  | { type: 'ready' }
+  | { type: 'openLink'; href: string }
+  | ({ type: 'createThread'; body: string } & ExplainerAnchor)
+  | { type: 'reply'; threadId: string; body: string }
+  | { type: 'setResolved'; threadId: string; resolved: boolean };
+
+/**
+ * Validates a message from an explainer page. The page is written by an agent
+ * and its own scripts share the webview with the comment UI, so what arrives
+ * is treated as untrusted input like everything else from a webview.
+ */
+export function asExplainerMessage(arg: unknown): ExplainerToHostMessage | undefined {
+  if (!arg || typeof arg !== 'object') return undefined;
+  const msg = arg as Record<string, unknown>;
+  switch (msg.type) {
+    case 'ready':
+      return { type: 'ready' };
+    case 'openLink':
+      return isNonEmptyString(msg.href) ? { type: 'openLink', href: msg.href } : undefined;
+    case 'createThread': {
+      if (typeof msg.body !== 'string' || msg.body.trim() === '') return undefined;
+      if (typeof msg.quote !== 'string') return undefined;
+      const quote = msg.quote.trim().slice(0, MAX_EXPLAINER_QUOTE);
+      if (quote === '') return undefined;
+      const section =
+        typeof msg.section === 'string' && msg.section.trim()
+          ? msg.section.trim().slice(0, MAX_EXPLAINER_SECTION)
+          : undefined;
+      return { type: 'createThread', body: msg.body.trim(), quote, section };
+    }
+    case 'reply':
+    case 'setResolved': {
+      const parsed = asWebviewToEditorMessage(msg);
+      return parsed?.type === msg.type ? (parsed as ExplainerToHostMessage) : undefined;
+    }
+    default:
+      return undefined;
+  }
 }

@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import {
+  MAX_EXPLAINER_QUOTE,
   asEditorSelection,
+  asExplainerMessage,
   asWebviewToEditorMessage,
   isMarkdownPath,
   parseRelativeLink,
@@ -101,6 +103,53 @@ describe('submitReview', () => {
       verdict: 'approve',
       body: '',
     });
+  });
+});
+
+describe('asExplainerMessage', () => {
+  test('accepts each message type', () => {
+    expect(asExplainerMessage({ type: 'ready' })).toEqual({ type: 'ready' });
+    expect(asExplainerMessage({ type: 'openLink', href: 'https://x' })).toEqual({
+      type: 'openLink',
+      href: 'https://x',
+    });
+    expect(
+      asExplainerMessage({ type: 'createThread', body: ' why? ', quote: ' yields ', section: ' Loop ' }),
+    ).toEqual({ type: 'createThread', body: 'why?', quote: 'yields', section: 'Loop' });
+    expect(asExplainerMessage({ type: 'reply', threadId: 't1', body: 'ok' })).toEqual({
+      type: 'reply',
+      threadId: 't1',
+      body: 'ok',
+    });
+    expect(asExplainerMessage({ type: 'setResolved', threadId: 't1', resolved: false })).toEqual({
+      type: 'setResolved',
+      threadId: 't1',
+      resolved: false,
+    });
+  });
+
+  test('a comment needs a body and the text it is on; the heading is optional', () => {
+    expect(asExplainerMessage({ type: 'createThread', body: '', quote: 'q' })).toBeUndefined();
+    expect(asExplainerMessage({ type: 'createThread', body: 'b', quote: '  ' })).toBeUndefined();
+    expect(asExplainerMessage({ type: 'createThread', body: 'b' })).toBeUndefined();
+    expect(asExplainerMessage({ type: 'createThread', body: 'b', quote: 'q', section: 3 })).toEqual({
+      type: 'createThread',
+      body: 'b',
+      quote: 'q',
+      section: undefined,
+    });
+  });
+
+  test('a long quote is kept by how it begins', () => {
+    const msg = asExplainerMessage({ type: 'createThread', body: 'b', quote: 'x'.repeat(5000) });
+    expect(msg).toMatchObject({ quote: 'x'.repeat(MAX_EXPLAINER_QUOTE) });
+  });
+
+  test('refuses what only the markdown preview sends', () => {
+    expect(asExplainerMessage({ type: 'openSource', line: 1 })).toBeUndefined();
+    expect(asExplainerMessage({ type: 'submitReview', verdict: 'approve', body: '' })).toBeUndefined();
+    expect(asExplainerMessage({ type: 'reply', threadId: 't1' })).toBeUndefined();
+    expect(asExplainerMessage(null)).toBeUndefined();
   });
 });
 

@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { Uri } from 'vscode';
 import {
@@ -58,6 +60,26 @@ describe('page html', () => {
     expect(PREVIEW_CSP).toContain('https://fonts.gstatic.com');
     expect(PREVIEW_CSP).toContain('https://unpkg.com');
     expect(PREVIEW_CSP).not.toContain('connect-src');
+  });
+
+  test('the comment UI joins the bridge only on a page whose PR is known', () => {
+    const page = '<!doctype html><html><head></head><body><p>hi</p></body></html>';
+    expect(withPreviewHead(page)).not.toContain('wtExplainerComments');
+
+    const ui = 'function wtExplainerComments(vscode) { vscode.postMessage({ type: "ready" }); }';
+    const html = withPreviewHead(page, ui);
+    // Inside the closure that holds the webview API, and run there.
+    const bridge = html.slice(html.indexOf('acquireVsCodeApi'), html.indexOf('</script>'));
+    expect(bridge).toContain(ui);
+    expect(bridge).toContain('wtExplainerComments(vscode);');
+    expect(html.match(/acquireVsCodeApi\(/g)).toHaveLength(1);
+    expect(html).toContain(PREVIEW_CSP);
+  });
+
+  test('the shipped comment UI can be inlined in a script tag', () => {
+    const ui = fs.readFileSync(path.join(__dirname, '../../media/explainer-comments.js'), 'utf8');
+    expect(ui).toMatch(/^function wtExplainerComments\(vscode\)/m);
+    expect(ui).not.toMatch(/<\/script/i);
   });
 
   test('titles are decoded and trimmed, and a blank one is no title', () => {

@@ -2,6 +2,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { describeError, log } from './log';
+import {
+  type ExplainerAnchor,
+  type ThreadView,
+  asExplainerMessage,
+} from './previewProtocol';
 
 /**
  * A `vscode://<extension id>/preview?path=<percent-encoded absolute path>`
@@ -61,8 +66,15 @@ export const PREVIEW_CSP = [
  * off, and keeps following it when the theme changes. It also sends every
  * link click to the extension, since navigating the webview itself would
  * replace the page with one it can't show.
+ *
+ * On a page whose PR is known, the comment UI (`media/explainer-comments.js`)
+ * is inlined into the same closure: the webview API can be acquired only
+ * once, and keeping it in here keeps it out of reach of the page's own
+ * scripts. Inlining rather than loading it also leaves the CSP as it is.
  */
-const BRIDGE_SCRIPT = `<script>
+function bridgeScript(comments?: string): string {
+  const commentUi = comments ? `\n${comments}\n  wtExplainerComments(vscode);` : '';
+  return `<script>
 (() => {
   const vscode = acquireVsCodeApi();
   const root = document.documentElement;
@@ -84,13 +96,17 @@ const BRIDGE_SCRIPT = `<script>
     if (href.startsWith('#')) return;
     e.preventDefault();
     vscode.postMessage({ type: 'openLink', href });
-  }, true);
+  }, true);${commentUi}
 })();
 </script>`;
+}
 
-/** The page with the CSP and the bridge script placed first in its `<head>`. */
-export function withPreviewHead(html: string): string {
-  const head = `<meta http-equiv="Content-Security-Policy" content="${PREVIEW_CSP}">\n${BRIDGE_SCRIPT}\n`;
+/**
+ * The page with the CSP and the bridge script placed first in its `<head>`,
+ * and with the comment UI when `comments` carries its script.
+ */
+export function withPreviewHead(html: string, comments?: string): string {
+  const head = `<meta http-equiv="Content-Security-Policy" content="${PREVIEW_CSP}">\n${bridgeScript(comments)}\n`;
   const open = /<head(\s[^>]*)?>/i.exec(html);
   if (open) {
     const at = open.index + open[0].length;
@@ -130,25 +146,59 @@ function errorPage(file: string, reason: string): string {
 <p>It will appear here as soon as the file is written.</p></body></html>`;
 }
 
+/** The PR a page explains, which is who comments written on it belong to. */
+export interface PageOwner {
+  pr: number;
+  branch: string;
+}
+
+/** What the preview needs from the comment store to host comments on a page. */
+export interface PageComments {
+  /** The PR the page at `file` explains, or undefined when no PR can be named. */
+  ownerOf(file: string): Promise<PageOwner | undefined>;
+  threads(owner: PageOwner): ThreadView[];
+  create(owner: PageOwner, anchor: ExplainerAnchor, body: string): Promise<void>;
+  reply(threadId: string, body: string): Promise<void>;
+  setResolved(threadId: string, resolved: boolean): Promise<void>;
+  readonly onDidChange: vscode.Event<void>;
+}
+
 interface OpenPreview {
   panel: vscode.WebviewPanel;
   watcher?: fs.FSWatcher;
   timer?: NodeJS.Timeout;
+  /** Set once the page's PR is known; a page without one takes no comments. */
+  owner?: PageOwner;
+  /** Thread to bring into view once the page says it is ready. */
+  pendingReveal?: string;
 }
 
 /** One webview panel per previewed file, re-rendered whenever the file changes. */
 export class HtmlPreviews implements vscode.Disposable {
   private readonly open = new Map<string, OpenPreview>();
+  private readonly disposables: vscode.Disposable[] = [];
+  private commentScript: Promise<string | undefined> | undefined;
+
+  constructor(
+    private readonly extensionUri?: vscode.Uri,
+    private readonly comments?: PageComments,
+  ) {
+    if (comments) {
+      this.disposables.push(comments.onDidChange(() => this.pushAllThreads()));
+    }
+  }
 
   /**
    * Opens `file`, or reveals its panel. `preserveFocus` keeps the cursor where
    * it is, for a page that opens because an agent finished it rather than
-   * because the reviewer asked.
+   * because the reviewer asked. `threadId` names a comment to scroll to, which
+   * is where a click on its row in the tree lands.
    */
-  async show(file: string, preserveFocus = false): Promise<void> {
+  async show(file: string, preserveFocus = false, threadId?: string): Promise<void> {
     const existing = this.open.get(file);
     if (existing) {
       existing.panel.reveal(undefined, preserveFocus);
+      if (threadId) void existing.panel.webview.postMessage({ type: 'revealThread', threadId });
       return;
     }
     const panel = vscode.window.createWebviewPanel(
@@ -164,16 +214,16 @@ export class HtmlPreviews implements vscode.Disposable {
         retainContextWhenHidden: true,
       },
     );
-    const entry: OpenPreview = { panel };
+    const entry: OpenPreview = { panel, pendingReveal: threadId };
     this.open.set(file, entry);
-    panel.webview.onDidReceiveMessage((msg: unknown) => void this.openLink(msg));
+    panel.webview.onDidReceiveMessage((msg: unknown) => void this.onMessage(entry, msg));
     panel.onDidDispose(() => {
       entry.watcher?.close();
       if (entry.timer) clearTimeout(entry.timer);
       if (this.open.get(file) === entry) this.open.delete(file);
     });
     entry.watcher = this.watch(file, entry);
-    await this.render(file, panel);
+    await this.render(file, entry);
   }
 
   /**
@@ -187,7 +237,7 @@ export class HtmlPreviews implements vscode.Disposable {
         if (changed && changed.toString() !== name) return;
         if (entry.timer) clearTimeout(entry.timer);
         entry.timer = setTimeout(
-          () => void this.render(file, entry.panel),
+          () => void this.render(file, entry),
           RERENDER_DEBOUNCE_MS,
         );
       });
@@ -197,7 +247,8 @@ export class HtmlPreviews implements vscode.Disposable {
     }
   }
 
-  private async render(file: string, panel: vscode.WebviewPanel): Promise<void> {
+  private async render(file: string, entry: OpenPreview): Promise<void> {
+    const { panel } = entry;
     let html: string;
     try {
       // The rule is checked again on the real path, so a symlink named like a
@@ -220,12 +271,72 @@ export class HtmlPreviews implements vscode.Disposable {
       return;
     }
     panel.title = pageTitle(html) ?? path.basename(file);
-    panel.webview.html = withPreviewHead(html);
+    // Asked on every render, so a page opened before its PR could be named
+    // takes comments once it is rewritten.
+    entry.owner = (await this.comments?.ownerOf(file).catch((err) => {
+      log().warn(`html preview: can't tell which PR ${file} explains: ${describeError(err)}`);
+      return undefined;
+    })) ?? entry.owner;
+    const script = entry.owner ? await this.loadCommentScript() : undefined;
+    panel.webview.html = withPreviewHead(html, script);
   }
 
-  private async openLink(msg: unknown): Promise<void> {
-    const { type, href } = (msg ?? {}) as { type?: unknown; href?: unknown };
-    if (type !== 'openLink' || typeof href !== 'string') return;
+  private loadCommentScript(): Promise<string | undefined> {
+    if (!this.extensionUri) return Promise.resolve(undefined);
+    const file = vscode.Uri.joinPath(this.extensionUri, 'media', 'explainer-comments.js').fsPath;
+    this.commentScript ??= fs.promises.readFile(file, 'utf8').catch((err) => {
+      log().error(`html preview: can't read ${file}: ${describeError(err)}`);
+      this.commentScript = undefined;
+      return undefined;
+    });
+    return this.commentScript;
+  }
+
+  private async onMessage(entry: OpenPreview, raw: unknown): Promise<void> {
+    const msg = asExplainerMessage(raw);
+    if (!msg) return;
+    if (msg.type === 'openLink') {
+      await this.openLink(msg.href);
+      return;
+    }
+    const { owner } = entry;
+    if (!owner || !this.comments) return;
+    switch (msg.type) {
+      case 'ready':
+        this.pushThreads(entry);
+        if (entry.pendingReveal) {
+          void entry.panel.webview.postMessage({
+            type: 'revealThread',
+            threadId: entry.pendingReveal,
+          });
+          entry.pendingReveal = undefined;
+        }
+        return;
+      case 'createThread':
+        await this.comments.create(owner, { quote: msg.quote, section: msg.section }, msg.body);
+        return;
+      case 'reply':
+        await this.comments.reply(msg.threadId, msg.body);
+        return;
+      case 'setResolved':
+        await this.comments.setResolved(msg.threadId, msg.resolved);
+        return;
+    }
+  }
+
+  private pushThreads(entry: OpenPreview): void {
+    if (!entry.owner || !this.comments) return;
+    void entry.panel.webview.postMessage({
+      type: 'threads',
+      threads: this.comments.threads(entry.owner),
+    });
+  }
+
+  private pushAllThreads(): void {
+    for (const entry of this.open.values()) this.pushThreads(entry);
+  }
+
+  private async openLink(href: string): Promise<void> {
     let uri: vscode.Uri;
     try {
       uri = vscode.Uri.parse(href, true);
@@ -241,5 +352,6 @@ export class HtmlPreviews implements vscode.Disposable {
 
   dispose(): void {
     for (const { panel } of [...this.open.values()]) panel.dispose();
+    for (const d of this.disposables) d.dispose();
   }
 }

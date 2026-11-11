@@ -27,6 +27,31 @@ export const EXPLAINER_STALL_MS = 30 * 60 * 1000;
 
 export type ExplainerStatus = 'started' | 'done' | 'failed';
 
+/**
+ * The `file` a comment on a PR's explainer is stored under, as a description's
+ * is under `PR-<n>.md`: the page's own path is a scratch file that changes
+ * from one run of the agent to the next, while the PR it explains does not.
+ */
+export function explainerFileName(pr: number): string {
+  return `PR-${pr}.explainer.html`;
+}
+
+/** The PR an explainer comment's file name belongs to, or undefined for another name. */
+export function prNumberFromExplainerFileName(file: string): number | undefined {
+  const match = /^PR-(\d+)\.explainer\.html$/.exec(file);
+  return match ? Number(match[1]) : undefined;
+}
+
+/**
+ * The PR a page names in its file name, as the wt-review skill writes them
+ * (`pr-46584.local.html`), for a page opened from a link before any agent
+ * reported it.
+ */
+export function prNumberFromPageName(page: string): number | undefined {
+  const match = /^pr-(\d+)\b/i.exec(path.basename(page));
+  return match ? Number(match[1]) : undefined;
+}
+
 /** An inbox entry reporting on a PR's explainer. */
 export interface ExplainerEntry {
   kind: 'explainer';
@@ -124,6 +149,16 @@ export class ExplainerStore implements vscode.Disposable {
 
   get(pr: number): ExplainerState | undefined {
     return this.states.get(pr);
+  }
+
+  /** The PR whose explainer is the page at `page`, by what was reported or else by its name. */
+  async prForPage(page: string): Promise<number | undefined> {
+    await this.load();
+    const wanted = path.normalize(page);
+    for (const [pr, state] of this.states) {
+      if (state.path && path.normalize(state.path) === wanted) return pr;
+    }
+    return prNumberFromPageName(page);
   }
 
   /** Reads the file, on first use or after `clear`. Awaited before the tree builds rows. */

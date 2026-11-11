@@ -43,6 +43,17 @@ export async function listOpenPrs(repoPath: string): Promise<OpenPr[]> {
   return (JSON.parse(stdout) as GhPrJson[]).map(toOpenPr);
 }
 
+/** The branch PR `prNumber` merges from, for a PR the open-PR list does not hold. */
+export async function prHeadBranch(repoPath: string, prNumber: number): Promise<string> {
+  const stdout = await execTimed(
+    'gh',
+    ['pr', 'view', String(prNumber), '--json', 'headRefName'],
+    repoPath,
+    `gh pr view #${prNumber}`,
+  );
+  return (JSON.parse(stdout) as { headRefName: string }).headRefName;
+}
+
 function toOpenPr(p: GhPrJson): OpenPr {
   return {
     number: p.number,

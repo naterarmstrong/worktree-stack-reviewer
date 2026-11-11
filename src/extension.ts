@@ -58,7 +58,22 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(previewEditor);
 
-  const htmlPreviews = new HtmlPreviews();
+  // Comments on an explainer go on its PR's branch, which the tree, built just
+  // below, is what can name.
+  const htmlPreviews: HtmlPreviews = new HtmlPreviews(context.extensionUri, {
+    ownerOf: (file) => worktreeProvider.explainerOwner(file),
+    threads: (owner) => {
+      const target = comments.explainerTarget(owner.pr, owner.branch);
+      return target ? comments.threadsForTarget(target) : [];
+    },
+    create: async (owner, anchor, body) => {
+      const target = comments.explainerTarget(owner.pr, owner.branch);
+      if (target) await comments.createExplainerThread(target, anchor, body);
+    },
+    reply: (threadId, body) => comments.replyToThread(threadId, body),
+    setResolved: (threadId, resolved) => comments.setThreadResolved(threadId, resolved),
+    onDidChange: comments.onDidChange,
+  });
   const worktreeProvider = new WorktreeProvider(
     comments,
     prBodies,

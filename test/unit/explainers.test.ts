@@ -1,10 +1,16 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { isExplainerEntry, isNoteEntry } from '../../src/commentStore';
 import {
   type ExplainerEntry,
+  ExplainerStore,
   explainerEntryProblem,
+  explainerFileName,
   nextExplainerState,
+  prNumberFromExplainerFileName,
+  prNumberFromPageName,
 } from '../../src/explainers';
+import { prNumberFromFileName } from '../../src/prBody';
+import { type Fixture, makeFixture } from '../fixtures/repo';
 import { parseEntries } from '../../src/resolutionInbox';
 
 const PAGE = '/private/tmp/x/scratchpad/wt-review/pr-46584.local.html';
@@ -69,5 +75,42 @@ describe('explainer state', () => {
     const failed = nextExplainerState(done, entry({ status: 'failed', error: 'gh down' }), NOW);
     expect(failed).toMatchObject({ status: 'failed', path: PAGE, error: 'gh down' });
     expect(nextExplainerState(failed, entry({ status: 'done', path: PAGE }), NOW).error).toBeUndefined();
+  });
+});
+
+describe('explainer comments', () => {
+  test('are stored under a name that gives back the PR, and no description shares it', () => {
+    expect(explainerFileName(142)).toBe('PR-142.explainer.html');
+    expect(prNumberFromExplainerFileName(explainerFileName(142))).toBe(142);
+    expect(prNumberFromExplainerFileName('PR-142.md')).toBeUndefined();
+    expect(prNumberFromFileName(explainerFileName(142))).toBeUndefined();
+  });
+
+  test('a page the agent never reported is named for its PR', () => {
+    expect(prNumberFromPageName(PAGE)).toBe(46584);
+    expect(prNumberFromPageName('/tmp/wt-review/PR-7.html')).toBe(7);
+    expect(prNumberFromPageName('/tmp/wt-review/overview.html')).toBeUndefined();
+    expect(prNumberFromPageName('/tmp/wt-review/pr-12abc.html')).toBeUndefined();
+  });
+});
+
+describe('the PR a page explains', () => {
+  let fixture: Fixture;
+
+  beforeEach(() => {
+    fixture = makeFixture();
+  });
+
+  afterEach(() => {
+    fixture.remove();
+  });
+
+  test('is the one the agent reported the page for, whatever the page is called', async () => {
+    const page = `${fixture.root}/scratch/wt-review/stream-loop.html`;
+    const store = new ExplainerStore(fixture.feature);
+    expect(await store.apply(entry({ pr: 77, status: 'done', path: page }))).toBeUndefined();
+    expect(await store.prForPage(page)).toBe(77);
+    expect(await store.prForPage(`${fixture.root}/scratch/wt-review/pr-9.html`)).toBe(9);
+    expect(await store.prForPage(`${fixture.root}/scratch/wt-review/other.html`)).toBeUndefined();
   });
 });

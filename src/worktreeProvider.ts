@@ -28,10 +28,16 @@ import type { ExportMeta, ReviewCommentController } from './commentController';
 import { type StoredThread, unreadCount } from './commentStore';
 import { unreadRowUri } from './unreadMark';
 import type { CompareLink } from './compareLink';
-import { EXPLAINER_STALL_MS, type ExplainerState, type ExplainerStore } from './explainers';
+import {
+  EXPLAINER_STALL_MS,
+  type ExplainerState,
+  type ExplainerStore,
+  prNumberFromExplainerFileName,
+} from './explainers';
 import {
   type OpenPr,
   listOpenPrs,
+  prHeadBranch,
   listOpenPrsForBranches,
   prBaseCommits,
   prCommentCountsBySha,
@@ -51,7 +57,7 @@ import {
   type ReviewPreviewEditorProvider,
 } from './previewEditor';
 import type { HiddenChange, HiddenChangeStore, HiddenView } from './hiddenChanges';
-import type { HtmlPreviews } from './htmlPreview';
+import type { HtmlPreviews, PageOwner } from './htmlPreview';
 import { rowUri, undecoratedRowUri } from './rowUri';
 import {
   type Bucket,
@@ -903,12 +909,13 @@ class CommentFileNode extends vscode.TreeItem {
     inDiff: boolean,
     public readonly diff: CommentDiff | undefined,
   ) {
-    // Threads on a PR description are grouped under the PR rather than under a
-    // path: the description is text on GitHub, and no file in the worktree
-    // holds it.
+    // Threads on a PR description or explainer are grouped under the PR rather
+    // than under a path: neither is a file in the worktree.
     const prNumber = prNumberFromFileName(file);
+    const explainerPr = prNumberFromExplainerFileName(file);
+    const pr = prNumber ?? explainerPr;
     super(
-      prNumber === undefined ? path.basename(file) : `#${prNumber}`,
+      pr === undefined ? path.basename(file) : `#${pr}`,
       vscode.TreeItemCollapsibleState.Expanded,
     );
     this.id = diff
@@ -919,6 +926,12 @@ class CommentFileNode extends vscode.TreeItem {
       this.description = 'description';
       this.tooltip = `Comments on #${prNumber}'s description.`;
       this.iconPath = new vscode.ThemeIcon('book');
+      return;
+    }
+    if (explainerPr !== undefined) {
+      this.description = 'explainer';
+      this.tooltip = `Comments on #${explainerPr}'s explainer.`;
+      this.iconPath = new vscode.ThemeIcon('preview');
       return;
     }
     const dir = path.dirname(file);
@@ -946,12 +959,15 @@ class CommentThreadNode extends vscode.TreeItem {
     this.id = diff
       ? `branchcommentthread:${worktreePath}:${diff.branch}:${thread.id}`
       : `commentthread:${worktreePath}:${thread.id}`;
+    // An explainer thread has no lines; the heading it sits under says where.
     const where =
-      thread.startLine === undefined
-        ? 'file'
-        : thread.startLine === thread.endLine
-          ? `L${thread.startLine}`
-          : `L${thread.startLine}-${thread.endLine}`;
+      thread.side === 'explainer'
+        ? (thread.section ?? 'page')
+        : thread.startLine === undefined
+          ? 'file'
+          : thread.startLine === thread.endLine
+            ? `L${thread.startLine}`
+            : `L${thread.startLine}-${thread.endLine}`;
     const flags: string[] = [where];
     if (thread.side === 'base') flags.push('base');
     if (thread.drifted) flags.push('drifted');
@@ -2756,6 +2772,20 @@ export class WorktreeProvider
    * markdown view a file gets, over a read-only document served from the PR
    * list the tree already holds.
    */
+  /**
+   * The PR the page at `file` explains and the branch it merges from, which is
+   * where comments written on the page go. The PR comes from what the agent
+   * reported, or from the page's name; its branch from the PR list, or from
+   * GitHub when the list doesn't have it.
+   */
+  async explainerOwner(file: string): Promise<PageOwner | undefined> {
+    const pr = await this.explainers.prForPage(file);
+    if (pr === undefined) return undefined;
+    const cached = this.prCache?.find((p) => p.number === pr);
+    const branch = cached?.headRefName ?? (await prHeadBranch(this.repoPath, pr));
+    return { pr, branch };
+  }
+
   /** Opens a finished explainer's page; a row still being written has nothing to open. */
   async openExplainer(item: unknown): Promise<void> {
     if (!(item instanceof ExplainerNode)) return;
@@ -3096,6 +3126,15 @@ export class WorktreeProvider
           buildPrBodyUri(worktreePath, prNumber, thread.branch),
           thread.id,
         );
+        return;
+      }
+      // Likewise an explainer's thread, on whichever page the PR's explainer
+      // is now.
+      if (thread.side === 'explainer') {
+        const prNumber = prNumberFromExplainerFileName(thread.file);
+        const page = prNumber === undefined ? undefined : this.explainers.get(prNumber)?.path;
+        if (!page) throw new Error(`#${prNumber ?? '?'} has no explainer page to open`);
+        await this.htmlPreviews.show(page, false, thread.id);
         return;
       }
       if (diff) {
@@ -3676,8 +3715,8 @@ function commentsOnVersion(
  * How many of a branch's review comments were left on each of its patches, so a
  * patch row can be marked the way it is for comments on the pull request.
  *
- * Comments on a pull request description are left out: they are about text on
- * GitHub rather than about the change, so no patch carries them.
+ * Comments on a pull request description or explainer are left out: they are
+ * about a page rather than about lines of the change, so no patch carries them.
  */
 function commentsByVersion(
   threads: StoredThread[],
@@ -3685,7 +3724,7 @@ function commentsByVersion(
 ): Map<number, PatchComments> {
   const counts = new Map<number, PatchComments>();
   for (const thread of threads) {
-    if (thread.side === 'pr') continue;
+    if (thread.side === 'pr' || thread.side === 'explainer') continue;
     const version = versionForComment(thread, versions);
     if (version === undefined) continue;
     const entry = counts.get(version) ?? { total: 0, open: 0 };

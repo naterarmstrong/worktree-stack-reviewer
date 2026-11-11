@@ -76,6 +76,31 @@ describe('CommentStore', () => {
     expect(stored?.file).toBe('PR-142.md');
   });
 
+  test('keeps a comment written on an explainer, with the text and heading it sits on', async () => {
+    const store = new CommentStore();
+    await store.load(fixture.feature);
+    store.add(
+      fixture.feature,
+      thread('ex', {
+        file: 'PR-142.explainer.html',
+        side: 'explainer',
+        startLine: undefined,
+        endLine: undefined,
+        snippet: 'the loop yields once per chunk',
+        section: 'Stream loop',
+      }),
+    );
+    await store.save(fixture.feature);
+
+    const reloaded = new CommentStore();
+    await reloaded.load(fixture.feature);
+    expect(reloaded.find(fixture.feature, 'ex')).toMatchObject({
+      side: 'explainer',
+      snippet: 'the loop yields once per chunk',
+      section: 'Stream loop',
+    });
+  });
+
   test('removal is durable and leaves the other threads alone', async () => {
     const store = new CommentStore();
     await store.load(fixture.feature);

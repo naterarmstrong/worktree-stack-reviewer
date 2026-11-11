@@ -10,9 +10,11 @@ import { stateDirFor } from './statePaths';
  * `base` is the read-only left side of a diff (the `wt-ext-git:` virtual
  * document), which is the only way to comment on lines that the change
  * deleted; `pr` is a pull request description (the `wt-ext-pr:` virtual
- * document), which is text on GitHub rather than anywhere in the worktree.
+ * document), which is text on GitHub rather than anywhere in the worktree;
+ * `explainer` is a PR's explainer page, a rendered HTML page with no lines to
+ * anchor to, so its threads carry the text they were written on instead.
  */
-export type CommentSide = 'working' | 'base' | 'pr';
+export type CommentSide = 'working' | 'base' | 'pr' | 'explainer';
 
 /**
  * One comments file per worktree, in its state directory (see `stateDirFor`).
@@ -65,7 +67,8 @@ export interface StoredThread {
   /**
    * Worktree-relative, always posix-separated. A `pr` thread has no file to
    * name, so it carries the description's name instead — `PR-142.md`, which is
-   * also what its tab reads.
+   * also what its tab reads. An `explainer` thread likewise carries
+   * `PR-142.explainer.html`.
    */
   file: string;
   side: CommentSide;
@@ -86,8 +89,18 @@ export interface StoredThread {
   /** 1-based inclusive. Both omitted for a whole-file comment. */
   startLine?: number;
   endLine?: number;
-  /** Verbatim full-line text the range covered when the comment was written. */
+  /**
+   * Verbatim full-line text the range covered when the comment was written. On
+   * an `explainer` thread, which has no range, the text selected on the page:
+   * what the thread is drawn beside when the page is next shown.
+   */
   snippet?: string;
+  /**
+   * On an `explainer` thread, the heading the selection sat under, so a quote
+   * that appears twice on the page is placed in the right section, and one the
+   * page no longer has still lands near where it was.
+   */
+  section?: string;
   /** Set when the snippet could no longer be found near its recorded line. */
   drifted?: boolean;
   resolved: boolean;
@@ -357,7 +370,7 @@ function isUsableThread(t: StoredThread): boolean {
   return (
     typeof t?.id === 'string' &&
     typeof t?.file === 'string' &&
-    (t.side === 'working' || t.side === 'base' || t.side === 'pr') &&
+    (t.side === 'working' || t.side === 'base' || t.side === 'pr' || t.side === 'explainer') &&
     Array.isArray(t.comments)
   );
 }
