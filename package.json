@@ -24,7 +24,7 @@
         {
           "id": "worktreeReview",
           "title": "Worktree Stack Reviewer",
-          "icon": "$(git-branch)"
+          "icon": "media/activitybar.svg"
         }
       ]
     },
