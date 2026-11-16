@@ -227,6 +227,12 @@ export function activate(context: vscode.ExtensionContext): void {
       'worktreeReview.compareVersionWithBase',
       (item) => worktreeProvider.compareWithBase(item),
     ),
+    vscode.commands.registerCommand('worktreeReview.showPatchInTree', (item) =>
+      worktreeProvider.showPatchInTree(item),
+    ),
+    vscode.commands.registerCommand('worktreeReview.showWholeBranch', (item) =>
+      worktreeProvider.showWholeBranch(item),
+    ),
     vscode.commands.registerCommand('worktreeReview.compareVersionWith', (item) =>
       worktreeProvider.compareWithPicked(item),
     ),

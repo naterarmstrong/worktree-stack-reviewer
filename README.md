@@ -164,6 +164,19 @@ repository. Under each one:
   a raw two-commit diff that would fold in restacks. When no clean interdiff
   exists, the extension offers the direct commit diff instead.
 
+  **Show Only This Patch in Changed Files**, on a patch's right-click menu,
+  does the same for the sidebar instead: the worktree's changed-file list is
+  narrowed to the files that patch changed over the one before it (the first
+  patch over its base), laid out in the usual flat or tree form, and each row
+  opens that file's interdiff. A row heading the list names the branch and the
+  pair being compared, and clicking it, or its close button, puts the whole
+  branch back. The patch row itself reads `in changed files` while it is the
+  one shown. The two sides are fixed when the patch is picked, so an amend
+  afterwards leaves the list on the patch that was chosen. Patch rows carry no
+  viewed checkbox, since viewed marks describe the whole branch's change. Where
+  no clean interdiff exists, the list falls back to the two commits diffed
+  directly and the heading row says `direct`.
+
   A compare can also be opened from a link, so an agent that has just
   committed a patch can point at exactly what changed since the previous one:
 

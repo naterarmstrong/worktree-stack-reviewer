@@ -91,6 +91,7 @@ type Node =
   | LocNode
   | PrBodyNode
   | VersionNode
+  | PatchFocusNode
   | CommentsSectionNode
   | CommentFileNode
   | CommentThreadNode
@@ -116,6 +117,25 @@ interface TrieDir {
   /** Files in this subtree, and how many of them are marked viewed. */
   total: number;
   viewed: number;
+}
+
+/**
+ * One patch a worktree's changed-file list has been narrowed to: what that
+ * version changed over the one before it (or over its base, for the first),
+ * the same interdiff "Compare with Previous Version" opens. The two trees are
+ * fixed when it is chosen, so a later amend leaves the list showing the patch
+ * that was picked rather than whatever now carries its number.
+ */
+interface PatchFocus {
+  branch: string;
+  version: number;
+  /** `p2 → p3`, or `base → p1`, as the banner row reads it. */
+  label: string;
+  left: string;
+  right: string;
+  /** No clean interdiff existed, so this is the two commits diffed directly. */
+  direct: boolean;
+  files: ChangedFile[];
 }
 
 /** Reports whether a changed file is marked viewed on its worktree's branch. */
@@ -299,6 +319,8 @@ class FolderNode extends vscode.TreeItem {
     public readonly relPath: string,
     public readonly trie: TrieDir,
     displayName: string,
+    /** Set while the worktree's list shows one patch, which its files open into. */
+    public readonly patch?: PatchFocus,
   ) {
     super(displayName, vscode.TreeItemCollapsibleState.Expanded);
     this.id = `folder:${worktreePath}:${relPath}`;
@@ -324,6 +346,7 @@ class FileNode extends vscode.TreeItem {
     lastVersion: number | undefined,
     viewedStatus: ViewedStatus,
     split: GtSplit | undefined,
+    patch?: PatchFocus,
   ) {
     super(path.basename(file.path), vscode.TreeItemCollapsibleState.None);
     this.id = `file:${worktreePath}:${file.path}`;
@@ -357,6 +380,52 @@ class FileNode extends vscode.TreeItem {
     // Deleted files have no working-tree copy, so they get no inline
     // open-file action.
     this.contextValue = file.status === 'D' ? 'fileDeleted' : 'file';
+    if (patch) {
+      // Both sides are trees from the branch's history, so the row opens the
+      // patch's own diff of the file. Viewed marks belong to the whole
+      // branch's change, so a patch row carries none, and the working copy is
+      // not what the row shows, so it gets no open-file action either.
+      this.checkboxState = undefined;
+      this.tooltip = `${file.path}\n${patch.branch}: ${patch.label}${patch.direct ? ' (direct)' : ''}`;
+      this.command = {
+        command: 'vscode.diff',
+        title: 'Open Diff',
+        arguments: [
+          buildGitUri(worktreePath, patch.left, file.oldPath ?? file.path),
+          buildGitUri(worktreePath, patch.right, file.path),
+          `${path.basename(file.path)} (${patch.branch}: ${patch.label})`,
+        ],
+      };
+      this.contextValue = 'patchFile';
+    }
+  }
+}
+
+/**
+ * Heads a worktree's changed-file list while it shows a single patch, saying
+ * which one. Clicking it puts the whole branch back.
+ */
+class PatchFocusNode extends vscode.TreeItem {
+  constructor(
+    public readonly worktreePath: string,
+    public readonly patch: PatchFocus,
+  ) {
+    super(`Showing p${patch.version} only`, vscode.TreeItemCollapsibleState.None);
+    this.id = `patchFocus:${worktreePath}`;
+    const bits = [patch.branch, patch.label];
+    if (patch.direct) bits.push('direct');
+    bits.push(count(patch.files.length, 'file', 'files'));
+    this.description = bits.join(' · ');
+    this.tooltip = patch.direct
+      ? `The files p${patch.version} of ${patch.branch} changes, diffed commit to commit: no clean interdiff exists, so this also shows whatever landed on the base between them.\nClick to show the whole branch again.`
+      : `The files p${patch.version} of ${patch.branch} changes over ${patch.label.split(' ')[0]}.\nClick to show the whole branch again.`;
+    this.iconPath = new vscode.ThemeIcon('filter');
+    this.contextValue = 'patchFocus';
+    this.command = {
+      command: 'worktreeReview.showWholeBranch',
+      title: 'Show Whole Branch',
+      arguments: [this],
+    };
   }
 }
 
@@ -751,6 +820,8 @@ class VersionNode extends vscode.TreeItem {
     public readonly prComments: number,
     /** Comments written in this extension while this version was the tip. */
     public readonly localComments: PatchComments,
+    /** The worktree's changed-file list is showing this patch alone. */
+    inTree = false,
   ) {
     // The icon slot already carries current-vs-earlier, so the comment marks go
     // in the label, the way the stack rows mark a branch with a star. They are
@@ -763,6 +834,7 @@ class VersionNode extends vscode.TreeItem {
     if (v.current) bits.push('current');
     bits.push(v.action);
     if (v.tip === false) bits.push('passed through');
+    if (inTree) bits.push('in changed files');
     if (v.pushed) {
       bits.push(v.push_seq !== undefined ? `push #${v.push_seq}` : 'pushed');
     }
@@ -1090,6 +1162,11 @@ export class WorktreeProvider
    * state calls for, and a `TreeItem` cannot ask the view whether it is open.
    */
   private readonly expandedBranches = new Set<string>();
+  /**
+   * The patch each worktree's changed-file list is narrowed to, keyed by
+   * worktree path. Absent for a worktree showing its whole branch.
+   */
+  private readonly patchFocus = new Map<string, PatchFocus>();
 
   constructor(
     private readonly comments: ReviewCommentController,
@@ -1143,6 +1220,18 @@ export class WorktreeProvider
       );
     }
     if (element instanceof FolderNode) {
+      if (element.patch) {
+        return buildNodes(
+          element.worktreePath,
+          element.base,
+          element.relPath,
+          element.trie,
+          new Map(),
+          notViewed,
+          () => undefined,
+          element.patch,
+        );
+      }
       return buildNodes(
         element.worktreePath,
         element.base,
@@ -1436,7 +1525,16 @@ export class WorktreeProvider
     const showPullRequests = config.get<boolean>('showPullRequests', true);
     // Runs first so `changedFiles` is populated before the comments section
     // asks which commented files are outside the diff.
-    const fileNodes = await this.getFileNodes(parent);
+    const branchFiles = await this.getFileNodes(parent);
+    const focus = this.patchFocus.get(parent.worktree.path);
+    // The banner sits directly above the files it narrows, so the list never
+    // reads as the whole branch while it is showing one patch.
+    const fileNodes = focus
+      ? [
+          new PatchFocusNode(parent.worktree.path, focus),
+          ...patchFileNodes(parent.worktree.path, parent.base, focus),
+        ]
+      : branchFiles;
     const sections: Node[] = [];
     if (showPullRequests) {
       // Omitted rather than shown empty: the only worktree with no stack is one
@@ -1979,6 +2077,7 @@ export class WorktreeProvider
         this.comments.threadsOnBranch(node.branch),
         listing.versions,
       );
+      const focus = this.patchFocus.get(node.worktreePath);
       return listing.versions.map(
         (v) =>
           new VersionNode(
@@ -1987,6 +2086,7 @@ export class WorktreeProvider
             v,
             commentsOnVersion(comments, v),
             local.get(v.version) ?? { total: 0, open: 0 },
+            focus?.branch === node.branch && focus.version === v.version,
           ),
       );
     } catch (err) {
@@ -2826,6 +2926,84 @@ export class WorktreeProvider
     );
   }
 
+  /**
+   * Narrows the worktree's changed-file list to what one patch changed over
+   * the one before it — the compare "Compare with Previous Version" opens, laid
+   * out as the sidebar's own file tree. The first patch has nothing before it,
+   * so it is measured from its base.
+   */
+  async showPatchInTree(item: unknown): Promise<void> {
+    if (!(item instanceof VersionNode)) return;
+    const { worktreePath, branch, v } = item;
+    const a = v.version > 1 ? String(v.version - 1) : 'base';
+    const b = String(v.version);
+    const start = Date.now();
+    let focus: PatchFocus;
+    try {
+      const result = await compareVersions(worktreePath, branch, a, b);
+      focus = {
+        branch,
+        version: v.version,
+        label: `${result.a.label} → ${result.b.label}`,
+        left: result.left_tree,
+        right: result.right_tree,
+        direct: false,
+        files: result.files
+          .map((f) => ({
+            status: patchStatus(f.status),
+            path: f.path,
+            oldPath: f.old_path ?? undefined,
+          }))
+          .sort((x, y) => x.path.localeCompare(y.path)),
+      };
+    } catch (err) {
+      const message = describe(err);
+      const previous = (await this.ensureVersions(worktreePath, branch).catch(() => undefined))
+        ?.versions.find((p) => p.version === v.version - 1);
+      // Without a clean interdiff the two commits are diffed as they stand,
+      // which is what the compare editor offers in the same spot, and the
+      // banner says so.
+      if (!message.includes('no clean interdiff') || !previous) {
+        log().error(`patch ${branch} p${v.version} failed: ${describeError(err)}`);
+        void vscode.window.showErrorMessage(`Worktree Stack Reviewer: ${message}`);
+        return;
+      }
+      try {
+        focus = {
+          branch,
+          version: v.version,
+          label: `p${previous.version} → p${v.version}`,
+          left: previous.sha,
+          right: v.sha,
+          direct: true,
+          files: await diffNameStatus(worktreePath, previous.sha, v.sha),
+        };
+      } catch (directErr) {
+        void vscode.window.showErrorMessage(
+          `Worktree Stack Reviewer: ${describe(directErr)}`,
+        );
+        return;
+      }
+    }
+    log().info(
+      `patch ${branch} ${focus.label}${focus.direct ? ' (direct)' : ''}: ${focus.files.length} files in ${elapsed(start)}`,
+    );
+    this.patchFocus.set(worktreePath, focus);
+    this.refresh();
+  }
+
+  /** Puts a worktree's changed-file list back to its whole branch. */
+  showWholeBranch(item: unknown): void {
+    const worktreePath =
+      item instanceof PatchFocusNode || item instanceof VersionNode
+        ? item.worktreePath
+        : item instanceof WorktreeNode
+          ? item.worktree.path
+          : undefined;
+    if (worktreePath === undefined || !this.patchFocus.delete(worktreePath)) return;
+    this.refresh();
+  }
+
   async compareWithBase(item: unknown): Promise<void> {
     if (!(item instanceof VersionNode)) return;
     await this.openVersionCompare(
@@ -3489,6 +3667,7 @@ function buildNodes(
   lastVersions: Map<string, number>,
   viewedOf: ViewedLookup,
   splitOf: SplitLookup,
+  patch?: PatchFocus,
 ): Node[] {
   const nodes: Node[] = [];
   const dirNames = Array.from(trie.dirs.keys()).sort();
@@ -3502,7 +3681,7 @@ function buildNodes(
       relPath = `${relPath}/${childName}`;
       sub = childTrie;
     }
-    nodes.push(new FolderNode(worktreePath, base, relPath, sub, displayName));
+    nodes.push(new FolderNode(worktreePath, base, relPath, sub, displayName, patch));
   }
   for (const f of trie.files) {
     nodes.push(
@@ -3514,10 +3693,49 @@ function buildNodes(
         lastVersions.get(f.path),
         viewedOf(f),
         splitOf(f),
+        patch,
       ),
     );
   }
   return nodes;
+}
+
+const notViewed: ViewedLookup = () => ({ viewed: false, baseMoved: false });
+
+/** gt names a compare's file statuses the way git does; anything else reads as modified. */
+function patchStatus(status: string): ChangedFile['status'] {
+  const s = status.charAt(0);
+  return s && 'AMDRCTU'.includes(s) ? (s as ChangedFile['status']) : 'M';
+}
+
+/**
+ * The files of the patch a worktree is focused on, laid out the way the
+ * whole branch's are. Nothing in a patch is marked viewed or carries a
+ * version: the marks and the versions both describe the whole branch.
+ */
+function patchFileNodes(worktreePath: string, base: string, focus: PatchFocus): Node[] {
+  if (focus.files.length === 0) {
+    return [new MessageNode(`p${focus.version} changes no files.`)];
+  }
+  const layout = vscode.workspace
+    .getConfiguration('worktreeReview')
+    .get<Layout>('layout', 'tree');
+  if (layout === 'flat') {
+    return focus.files.map(
+      (f) =>
+        new FileNode(worktreePath, base, f, true, undefined, notViewed(f), undefined, focus),
+    );
+  }
+  return buildNodes(
+    worktreePath,
+    base,
+    '',
+    buildTrie(focus.files, notViewed),
+    new Map(),
+    notViewed,
+    () => undefined,
+    focus,
+  );
 }
 
 function collectFiles(trie: TrieDir): ChangedFile[] {

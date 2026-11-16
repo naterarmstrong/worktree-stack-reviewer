@@ -2,7 +2,7 @@
   "name": "worktree-stack-reviewer",
   "displayName": "Worktree Stack Reviewer",
   "description": "Worktree review with editable diffs and inline comments, scoped to the GitHub stack parent (gh stack / gt).",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "publisher": "naterarmstrong",
   "private": true,
   "license": "MIT",
@@ -189,6 +189,17 @@
         "category": "Worktree Stack Reviewer"
       },
       {
+        "command": "worktreeReview.showPatchInTree",
+        "title": "Show Only This Patch in Changed Files",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.showWholeBranch",
+        "title": "Show Whole Branch in Changed Files",
+        "icon": "$(close)",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
         "command": "worktreeReview.createComment",
         "title": "Add Comment",
         "category": "Worktree Stack Reviewer"
@@ -319,6 +330,14 @@
         {
           "command": "worktreeReview.reviewPr",
           "when": "false"
+        },
+        {
+          "command": "worktreeReview.showPatchInTree",
+          "when": "false"
+        },
+        {
+          "command": "worktreeReview.showWholeBranch",
+          "when": "false"
         }
       ],
       "webview/context": [
@@ -436,6 +455,16 @@
           "command": "worktreeReview.compareBranchVersions",
           "when": "view == worktreeReview.changes && (viewItem == pr || viewItem == branch)",
           "group": "versions@1"
+        },
+        {
+          "command": "worktreeReview.showPatchInTree",
+          "when": "view == worktreeReview.changes && (viewItem == version || viewItem == versionFirst)",
+          "group": "patch@1"
+        },
+        {
+          "command": "worktreeReview.showWholeBranch",
+          "when": "view == worktreeReview.changes && viewItem == patchFocus",
+          "group": "inline"
         },
         {
           "command": "worktreeReview.compareVersionWithPrevious",
