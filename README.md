@@ -120,6 +120,13 @@ repository. Under each one:
   the dialog with the draft intact; a posted review appears in the
   description's conversation.
 
+  If you started a review on GitHub and left it pending (inline comments
+  added, not yet submitted), the dialog submits that review instead of
+  opening a new one, which GitHub would refuse while yours is pending. The
+  verdict and comment come from the dialog, the pending inline comments go
+  out with it, and the confirmation says how many there were. An empty comment
+  keeps whatever summary the pending review already had.
+
   **Edit PR Description** — the pencil on a description row, and also on a
   PR's branch row menu and the title bar of an open description — opens the
   body as an ordinary markdown file, `PR-<n>.md`, read fresh from GitHub.

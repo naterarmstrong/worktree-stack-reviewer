@@ -1,4 +1,5 @@
 import { execTimed } from './exec';
+import { describeError, log } from './log';
 import type { ReviewVerdict } from './previewProtocol';
 
 export interface OpenPr {
@@ -235,24 +236,110 @@ export async function prCommentCountsBySha(
 
 export type PrReviewKind = ReviewVerdict;
 
+/** The `gh` user's own unsubmitted review on a PR, started on GitHub. */
+export interface PendingReview {
+  id: string;
+  /** Inline comments waiting in it, which go out when it is submitted. */
+  comments: number;
+}
+
 /**
- * Submits a review on a PR as the `gh` user. The body is passed as an argument
- * rather than through a shell, so any text a reviewer types is sent as-is.
- * Rejects with gh's own message — GitHub refuses, for example, an approval or
- * a change request on a PR the reviewer opened.
+ * The `gh` user's pending review on PR `prNumber`, if they have one. GitHub
+ * shows a pending review only to its author, and allows each user one per PR,
+ * so at most one comes back; `viewerDidAuthor` is checked all the same.
+ */
+export async function pendingPrReview(
+  repoPath: string,
+  prNumber: number,
+): Promise<PendingReview | undefined> {
+  const query = `query($owner: String!, $name: String!, $n: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $n) {
+      reviews(states: PENDING, first: 10) { nodes { id viewerDidAuthor comments { totalCount } } }
+    }
+  }
+}`;
+  const stdout = await execTimed(
+    'gh',
+    ['api', 'graphql', '-F', 'owner={owner}', '-F', 'name={repo}', '-F', `n=${prNumber}`, '-f', `query=${query}`],
+    repoPath,
+    `gh pr pending review #${prNumber}`,
+  );
+  type Node = { id: string; viewerDidAuthor?: boolean; comments?: { totalCount?: number } };
+  const nodes =
+    (JSON.parse(stdout) as {
+      data?: { repository?: { pullRequest?: { reviews?: { nodes?: Node[] } } | null } };
+    }).data?.repository?.pullRequest?.reviews?.nodes ?? [];
+  const own = nodes.find((n) => n.viewerDidAuthor);
+  return own ? { id: own.id, comments: own.comments?.totalCount ?? 0 } : undefined;
+}
+
+const REVIEW_EVENTS: Record<PrReviewKind, string> = {
+  approve: 'APPROVE',
+  comment: 'COMMENT',
+  'request-changes': 'REQUEST_CHANGES',
+};
+
+/**
+ * Submits a review on a PR as the `gh` user, and says how many inline
+ * comments from a pending review went out with it.
+ *
+ * A review the user started on GitHub and has not submitted is submitted
+ * here, with this verdict and body, so its inline comments are posted rather
+ * than left behind. `gh pr review` cannot do that: it starts a new review,
+ * which GitHub refuses while one is pending. With no pending review, or when
+ * looking for one fails, the review goes through `gh pr review` as before.
+ *
+ * Text is passed as an argument rather than through a shell, so anything a
+ * reviewer types is sent as-is. Rejects with gh's own message — GitHub
+ * refuses, for example, an approval or a change request on a PR the reviewer
+ * opened.
  */
 export async function submitPrReview(
   repoPath: string,
   prNumber: number,
   kind: PrReviewKind,
   body: string,
-): Promise<void> {
-  const args = ['pr', 'review', String(prNumber), `--${kind}`];
-  if (body) args.push('--body', body);
+): Promise<{ pendingComments: number }> {
+  let pending: PendingReview | undefined;
   try {
+    pending = await pendingPrReview(repoPath, prNumber);
+  } catch (err) {
+    log().warn(`pending review lookup #${prNumber} failed, posting a new review: ${describeError(err)}`);
+  }
+  try {
+    if (pending) {
+      await submitPendingReview(repoPath, prNumber, pending.id, kind, body);
+      return { pendingComments: pending.comments };
+    }
+    const args = ['pr', 'review', String(prNumber), `--${kind}`];
+    if (body) args.push('--body', body);
     await execTimed('gh', args, repoPath, `gh pr review #${prNumber} --${kind}`);
+    return { pendingComments: 0 };
   } catch (err) {
     const stderr = (err as { stderr?: string }).stderr?.trim();
     throw new Error(stderr || (err instanceof Error ? err.message : String(err)));
   }
+}
+
+/**
+ * Submits a pending review. An empty body is left out rather than sent, so
+ * a summary already typed into the pending review on GitHub is kept.
+ */
+async function submitPendingReview(
+  repoPath: string,
+  prNumber: number,
+  reviewId: string,
+  kind: PrReviewKind,
+  body: string,
+): Promise<void> {
+  const withBody = body !== '';
+  const query = `mutation($id: ID!, $event: PullRequestReviewEvent!${withBody ? ', $body: String!' : ''}) {
+  submitPullRequestReview(input: { pullRequestReviewId: $id, event: $event${withBody ? ', body: $body' : ''} }) {
+    pullRequestReview { id }
+  }
+}`;
+  const args = ['api', 'graphql', '-f', `query=${query}`, '-f', `id=${reviewId}`, '-f', `event=${REVIEW_EVENTS[kind]}`];
+  if (withBody) args.push('-f', `body=${body}`);
+  await execTimed('gh', args, repoPath, `gh pr review #${prNumber} --${kind} (pending)`);
 }

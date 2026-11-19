@@ -9,12 +9,14 @@ describe('submitPrReview', () => {
   let originalPath: string | undefined;
 
   beforeEach(() => {
-    // A stand-in `gh` that records its arguments, one per line, and fails the
-    // way gh does when told to.
+    // A stand-in `gh` that records each call's arguments, one per line with a
+    // blank line after each call, answers the pending-review lookup with the
+    // `pending` file, and fails the way gh does when told to.
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-gh-'));
     fs.writeFileSync(
       path.join(dir, 'gh'),
-      `#!/bin/sh\nprintf '%s\\n' "$@" > "${dir}/args"\n` +
+      `#!/bin/sh\nprintf '%s\\n' "$@" '' >> "${dir}/calls"\n` +
+        `case "$*" in *"states: PENDING"*) cat "${dir}/pending" 2>/dev/null; exit 0;; esac\n` +
         `if [ -n "$FAKE_GH_FAIL" ]; then echo "$FAKE_GH_FAIL" >&2; exit 1; fi\n`,
       { mode: 0o755 },
     );
@@ -28,11 +30,32 @@ describe('submitPrReview', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  const args = () => fs.readFileSync(path.join(dir, 'args'), 'utf8').trimEnd().split('\n');
+  /** Each call's arguments, in order. */
+  const calls = () =>
+    fs
+      .readFileSync(path.join(dir, 'calls'), 'utf8')
+      .split('\n\n')
+      .filter((c) => c.trim() !== '')
+      .map((c) => c.replace(/^\n/, '').split('\n'));
+  /** The call that posted the review, after the lookup. */
+  const posted = () => calls().at(-1);
+
+  const pendingReviews = (nodes: unknown[]) =>
+    fs.writeFileSync(
+      path.join(dir, 'pending'),
+      JSON.stringify({ data: { repository: { pullRequest: { reviews: { nodes } } } } }),
+    );
 
   test('sends the verdict and the comment as they were typed', async () => {
-    await submitPrReview(dir, 142, 'request-changes', 'Please split `foo`; $(rm -rf /) stays text');
-    expect(args()).toEqual([
+    pendingReviews([]);
+    const result = await submitPrReview(
+      dir,
+      142,
+      'request-changes',
+      'Please split `foo`; $(rm -rf /) stays text',
+    );
+    expect(result).toEqual({ pendingComments: 0 });
+    expect(posted()).toEqual([
       'pr',
       'review',
       '142',
@@ -43,15 +66,55 @@ describe('submitPrReview', () => {
   });
 
   test('approves without a body when none was given', async () => {
+    pendingReviews([]);
     await submitPrReview(dir, 7, 'approve', '');
-    expect(args()).toEqual(['pr', 'review', '7', '--approve']);
+    expect(posted()).toEqual(['pr', 'review', '7', '--approve']);
   });
 
   test("rejects with gh's own message", async () => {
+    pendingReviews([]);
     process.env.FAKE_GH_FAIL = 'failed to create review: Can not approve your own pull request';
     await expect(submitPrReview(dir, 7, 'approve', '')).rejects.toThrow(
       'Can not approve your own pull request',
     );
+  });
+
+  test('submits the pending review started on GitHub, with its comments', async () => {
+    pendingReviews([{ id: 'PRR_kwDOabc', viewerDidAuthor: true, comments: { totalCount: 3 } }]);
+    const result = await submitPrReview(dir, 142, 'request-changes', 'See inline; $(x) stays text');
+
+    expect(result).toEqual({ pendingComments: 3 });
+    const lookup = calls()[0];
+    expect(lookup).toContain('n=142');
+    const submit = posted() ?? [];
+    expect(submit.slice(0, 2)).toEqual(['api', 'graphql']);
+    expect(submit.join('\n')).toContain('submitPullRequestReview');
+    expect(submit).toContain('id=PRR_kwDOabc');
+    expect(submit).toContain('event=REQUEST_CHANGES');
+    expect(submit).toContain('body=See inline; $(x) stays text');
+    expect(calls().some((c) => c[0] === 'pr')).toBe(false);
+  });
+
+  test("leaves the pending review's own summary alone when no body is given", async () => {
+    pendingReviews([{ id: 'PRR_1', viewerDidAuthor: true, comments: { totalCount: 1 } }]);
+    await submitPrReview(dir, 142, 'approve', '');
+
+    const submit = posted() ?? [];
+    expect(submit).toContain('event=APPROVE');
+    expect(submit.some((a) => a.startsWith('body='))).toBe(false);
+    expect(submit.join('\n')).not.toContain('$body');
+  });
+
+  test("ignores a pending review that is not the gh user's", async () => {
+    pendingReviews([{ id: 'PRR_other', viewerDidAuthor: false, comments: { totalCount: 2 } }]);
+    await submitPrReview(dir, 7, 'comment', 'LGTM');
+    expect(posted()).toEqual(['pr', 'review', '7', '--comment', '--body', 'LGTM']);
+  });
+
+  test('posts a new review when the lookup cannot be read', async () => {
+    fs.writeFileSync(path.join(dir, 'pending'), 'not json');
+    await submitPrReview(dir, 7, 'approve', '');
+    expect(posted()).toEqual(['pr', 'review', '7', '--approve']);
   });
 });
 

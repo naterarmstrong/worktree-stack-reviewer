@@ -326,8 +326,9 @@ export class ReviewPreviewEditorProvider
       });
       return;
     }
+    let pendingComments: number;
     try {
-      await submitPrReview(pr.worktreePath, pr.number, verdict, body.trim());
+      ({ pendingComments } = await submitPrReview(pr.worktreePath, pr.number, verdict, body.trim()));
     } catch (err) {
       log().error(`gh pr review #${pr.number} failed: ${describeError(err)}`);
       void panel.webview.postMessage({
@@ -343,7 +344,11 @@ export class ReviewPreviewEditorProvider
       comment: 'Commented on',
       'request-changes': 'Requested changes on',
     };
-    void vscode.window.showInformationMessage(`${done[verdict]} #${pr.number}.`);
+    const carried =
+      pendingComments > 0
+        ? `, with the ${pendingComments} comment${pendingComments === 1 ? '' : 's'} from your pending review`
+        : '';
+    void vscode.window.showInformationMessage(`${done[verdict]} #${pr.number}${carried}.`);
     void this.prBodies.refresh(pr.number);
   }
 
