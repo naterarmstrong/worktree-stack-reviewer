@@ -7,6 +7,11 @@ import { GIT_SCHEME, GitContentProvider } from './gitContentProvider';
 import { HTML_PREVIEW_LINK_PATH, HtmlPreviews, parseHtmlPreviewLink } from './htmlPreview';
 import { initLog, log } from './log';
 import { PR_BODY_SCHEME, PrBodyContentProvider } from './prBody';
+import {
+  PR_BODY_EDIT_SCHEME,
+  PrBodyFileSystemProvider,
+  ghPrBodyEditorDeps,
+} from './prBodyEditor';
 import { asPreviewSelectionContext } from './previewComment';
 import { registerUnreadMarks } from './unreadMark';
 import {
@@ -49,6 +54,20 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     prBodies,
     vscode.workspace.registerTextDocumentContentProvider(PR_BODY_SCHEME, prBodies),
+  );
+
+  // A saved description reaches the tree, built further down, through this.
+  const prBodyEdits = new PrBodyFileSystemProvider(
+    ghPrBodyEditorDeps(repoPath, (prNumber, body) => {
+      prBodies.setBody(prNumber, body);
+      worktreeProvider.prBodySaved(prNumber, body);
+    }),
+  );
+  context.subscriptions.push(
+    prBodyEdits,
+    vscode.workspace.registerFileSystemProvider(PR_BODY_EDIT_SCHEME, prBodyEdits, {
+      isCaseSensitive: true,
+    }),
   );
 
   const previewEditor = new ReviewPreviewEditorProvider(
@@ -212,6 +231,9 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand('worktreeReview.openPrBody', (item) =>
       worktreeProvider.openPrBody(item),
+    ),
+    vscode.commands.registerCommand('worktreeReview.editPrBody', (item) =>
+      worktreeProvider.editPrBody(item),
     ),
     vscode.commands.registerCommand('worktreeReview.openExplainer', (item) =>
       worktreeProvider.openExplainer(item),

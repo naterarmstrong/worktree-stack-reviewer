@@ -162,6 +162,13 @@ export class PrBodyContentProvider implements vscode.TextDocumentContentProvider
     }
   }
 
+  /** Takes a description just saved from here, re-rendering any tab holding it. */
+  setBody(prNumber: number, body: string): void {
+    this.bodies.set(prNumber, body);
+    if (!this.rendered.has(prNumber)) return;
+    this.rerender(prNumber);
+  }
+
   /** Re-reads a PR's conversation now, e.g. right after a review was posted. */
   refresh(prNumber: number): Promise<void> {
     return this.refreshConversation(prNumber);
@@ -175,6 +182,11 @@ export class PrBodyContentProvider implements vscode.TextDocumentContentProvider
     } finally {
       this.refreshing.delete(prNumber);
     }
+    this.rerender(prNumber);
+  }
+
+  /** Renders a PR's document again and, when it changed, re-reads every tab holding it. */
+  private rerender(prNumber: number): void {
     const before = this.rendered.get(prNumber);
     if (before === this.render(prNumber)) return;
     for (const [key, number] of this.served) {

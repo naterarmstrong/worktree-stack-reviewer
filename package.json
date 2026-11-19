@@ -2,7 +2,7 @@
   "name": "worktree-stack-reviewer",
   "displayName": "Worktree Stack Reviewer",
   "description": "Worktree review with editable diffs and inline comments, scoped to the GitHub stack parent (gh stack / gt).",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "publisher": "naterarmstrong",
   "private": true,
   "license": "MIT",
@@ -155,6 +155,12 @@
       {
         "command": "worktreeReview.openPrBody",
         "title": "Open PR Description",
+        "category": "Worktree Stack Reviewer"
+      },
+      {
+        "command": "worktreeReview.editPrBody",
+        "title": "Edit PR Description",
+        "icon": "$(edit)",
         "category": "Worktree Stack Reviewer"
       },
       {
@@ -332,6 +338,10 @@
           "when": "false"
         },
         {
+          "command": "worktreeReview.editPrBody",
+          "when": "false"
+        },
+        {
           "command": "worktreeReview.showPatchInTree",
           "when": "false"
         },
@@ -354,6 +364,11 @@
         },
         {
           "command": "worktreeReview.reviewPr",
+          "when": "resourceScheme == wt-ext-pr",
+          "group": "navigation"
+        },
+        {
+          "command": "worktreeReview.editPrBody",
           "when": "resourceScheme == wt-ext-pr",
           "group": "navigation"
         }
@@ -450,6 +465,16 @@
           "command": "worktreeReview.reviewPr",
           "when": "view == worktreeReview.changes && (viewItem == pr || viewItem == prBody)",
           "group": "navigation@5"
+        },
+        {
+          "command": "worktreeReview.editPrBody",
+          "when": "view == worktreeReview.changes && (viewItem == pr || viewItem == prBody)",
+          "group": "navigation@6"
+        },
+        {
+          "command": "worktreeReview.editPrBody",
+          "when": "view == worktreeReview.changes && viewItem == prBody",
+          "group": "inline"
         },
         {
           "command": "worktreeReview.compareBranchVersions",

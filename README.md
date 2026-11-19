@@ -120,6 +120,16 @@ repository. Under each one:
   the dialog with the draft intact; a posted review appears in the
   description's conversation.
 
+  **Edit PR Description** — the pencil on a description row, and also on a
+  PR's branch row menu and the title bar of an open description — opens the
+  body as an ordinary markdown file, `PR-<n>.md`, read fresh from GitHub.
+  Saving it writes the body back through the REST API as the `gh` user, then
+  updates the row's summary and any open preview of the description. Before
+  writing, a save reads the body again, and if someone changed it on GitHub
+  after you opened it, a dialog asks whether to overwrite their edit. Cancel
+  leaves your text unsaved in the editor. Only the body is sent; the
+  conversation below it in the preview is not part of the file.
+
   The worktree's own PR also sits directly under the worktree, after the Stack
   section and above the changed files, as the virtual file `PR-<n>.md` — the
   same document, the same name its tab carries.

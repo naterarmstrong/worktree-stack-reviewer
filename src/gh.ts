@@ -54,6 +54,40 @@ export async function prHeadBranch(repoPath: string, prNumber: number): Promise<
   return (JSON.parse(stdout) as { headRefName: string }).headRefName;
 }
 
+/**
+ * PR `prNumber`'s description as GitHub holds it now, read fresh rather than
+ * from the PR list so an edit starts from, and is checked against, the latest.
+ */
+export async function prBody(repoPath: string, prNumber: number): Promise<string> {
+  const stdout = await execTimed(
+    'gh',
+    ['pr', 'view', String(prNumber), '--json', 'body'],
+    repoPath,
+    `gh pr view #${prNumber} body`,
+  );
+  return (JSON.parse(stdout) as { body?: string }).body ?? '';
+}
+
+/**
+ * Replaces PR `prNumber`'s description. Goes through the REST endpoint rather
+ * than `gh pr edit`, which also reads the PR's classic projects and fails on
+ * GitHub's deprecation of them. `-f` sends the body as a raw string, so text
+ * opening with `@` is never read as a file name.
+ */
+export async function setPrBody(repoPath: string, prNumber: number, body: string): Promise<void> {
+  try {
+    await execTimed(
+      'gh',
+      ['api', '-X', 'PATCH', `repos/{owner}/{repo}/pulls/${prNumber}`, '-f', `body=${body}`, '--silent'],
+      repoPath,
+      `gh pr edit #${prNumber} body`,
+    );
+  } catch (err) {
+    const stderr = (err as { stderr?: string }).stderr?.trim();
+    throw new Error(stderr || (err instanceof Error ? err.message : String(err)));
+  }
+}
+
 function toOpenPr(p: GhPrJson): OpenPr {
   return {
     number: p.number,

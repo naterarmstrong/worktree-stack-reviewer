@@ -44,6 +44,7 @@ import {
 } from './gh';
 import { buildGitUri } from './gitContentProvider';
 import { describeError, elapsed, log } from './log';
+import { buildPrBodyEditUri } from './prBodyEditor';
 import {
   type PrBodyContentProvider,
   buildPrBodyUri,
@@ -2914,6 +2915,34 @@ export class WorktreeProvider
         `Worktree Stack Reviewer: could not open #${item.pr.number}'s description — ${describe(err)}`,
       );
     }
+  }
+
+  /**
+   * Opens a PR's description as an editable markdown file, from its branch
+   * row, its description row, or the title bar of its open description.
+   * Saving writes it back to GitHub; see `PrBodyFileSystemProvider`.
+   */
+  async editPrBody(item: unknown): Promise<void> {
+    let prNumber: number | undefined;
+    if (item instanceof vscode.Uri) prNumber = parsePrBodyUri(item)?.number;
+    else if (item instanceof StackBranchNode || item instanceof PrBodyNode) prNumber = item.pr?.number;
+    if (prNumber === undefined) return;
+    try {
+      await vscode.window.showTextDocument(buildPrBodyEditUri(prNumber), { preview: false });
+    } catch (err) {
+      log().error(`editPrBody #${prNumber}: ${describeError(err)}`);
+      void vscode.window.showErrorMessage(
+        `Worktree Stack Reviewer: could not open #${prNumber}'s description for editing — ${describe(err)}`,
+      );
+    }
+  }
+
+  /** Takes a description saved from the editor, so its row summarises the new text. */
+  prBodySaved(prNumber: number, body: string): void {
+    const pr = this.prCache?.find((p) => p.number === prNumber);
+    if (!pr || pr.body === body) return;
+    pr.body = body;
+    this.refresh();
   }
 
   async compareWithPrevious(item: unknown): Promise<void> {

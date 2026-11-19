@@ -62,3 +62,27 @@ export const workspace = {
     get: <T>(_section: string, fallback?: T): T | undefined => fallback,
   }),
 };
+
+export enum FileType {
+  Unknown = 0,
+  File = 1,
+  Directory = 2,
+  SymbolicLink = 64,
+}
+
+/** Carries its code in the name, as VS Code's own does. */
+export class FileSystemError extends Error {
+  private constructor(message: string, code: string) {
+    super(message);
+    this.name = `${code} (FileSystemError)`;
+  }
+  static FileNotFound(what?: unknown): FileSystemError {
+    return new FileSystemError(String(what), 'FileNotFound');
+  }
+  static NoPermissions(what?: unknown): FileSystemError {
+    return new FileSystemError(String(what), 'NoPermissions');
+  }
+  static Unavailable(what?: unknown): FileSystemError {
+    return new FileSystemError(String(what), 'Unavailable');
+  }
+}
